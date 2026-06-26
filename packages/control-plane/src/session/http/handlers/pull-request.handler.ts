@@ -52,6 +52,12 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       if (!session) {
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
+      if (!session.repo_owner || !session.repo_name) {
+        return Response.json(
+          { error: "Pull requests require a repository target" },
+          { status: 400 }
+        );
+      }
 
       const promptingParticipantResult = await deps.getPromptingParticipantForPR();
       if (!promptingParticipantResult.participant) {
@@ -66,16 +72,10 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
       if ("error" in authResolution) {
         return Response.json({ error: authResolution.error }, { status: authResolution.status });
       }
-      if (!session.repo_owner || !session.repo_name || !session.base_branch) {
-        return Response.json(
-          { error: "Pull requests require a repository target" },
-          { status: 400 }
-        );
-      }
 
       const result = await deps.createPullRequest({
         ...body,
-        baseBranch: body.baseBranch || session.base_branch,
+        baseBranch: body.baseBranch || session.base_branch || undefined,
         promptingUserId: promptingParticipant.user_id,
         promptingAuth: authResolution.auth,
         sessionUrl: deps.getSessionUrl(session),

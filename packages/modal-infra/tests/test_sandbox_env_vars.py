@@ -3,7 +3,68 @@ import json
 import pytest
 
 from sandbox_runtime.types import SessionConfig
-from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxConfig, SandboxManager
+from src.sandbox.manager import (
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    SandboxConfig,
+    SandboxManager,
+    _repository_mode,
+)
+
+
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name", "expected"),
+    [
+        ("acme", "repo", "single"),
+        (None, None, "none"),
+    ],
+)
+def test_repository_mode_accepts_complete_or_absent_metadata(repo_owner, repo_name, expected):
+    assert _repository_mode(repo_owner, repo_name) == expected
+
+
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name"),
+    [
+        ("acme", None),
+        (None, "repo"),
+    ],
+)
+def test_repository_mode_rejects_partial_repo_metadata(repo_owner, repo_name):
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        _repository_mode(repo_owner, repo_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repo_owner", "repo_name"),
+    [
+        ("acme", None),
+        (None, "repo"),
+    ],
+)
+async def test_create_sandbox_rejects_partial_repo_metadata(repo_owner, repo_name):
+    manager = SandboxManager()
+
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        await manager.create_sandbox(SandboxConfig(repo_owner=repo_owner, repo_name=repo_name))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_config",
+    [
+        {"repo_owner": "acme", "repo_name": None, "session_id": "sess-1"},
+        {"repo_owner": None, "repo_name": "repo", "session_id": "sess-1"},
+    ],
+)
+async def test_restore_rejects_partial_repo_metadata(session_config):
+    manager = SandboxManager()
+
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        await manager.restore_from_snapshot(
+            snapshot_image_id="img-abc",
+            session_config=session_config,
+        )
 
 
 @pytest.mark.asyncio

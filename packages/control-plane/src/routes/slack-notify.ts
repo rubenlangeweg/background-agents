@@ -95,7 +95,9 @@ export async function handleSlackNotify(
     logDenial(sessionId, ctx, parsed, audit, "feature_disabled");
     return failureResponse(
       "feature_disabled",
-      "Slack agent notifications are disabled for this repository."
+      repoScope
+        ? "Slack agent notifications are disabled for this repository."
+        : "Slack agent notifications are disabled globally."
     );
   }
 

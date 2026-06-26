@@ -450,6 +450,28 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.repo).toBe("No repository");
   });
 
+  it("uses global wording when global Slack settings disable notifications", async () => {
+    seedActiveSession({
+      spawnSource: "automation",
+      repoOwner: null,
+      repoName: null,
+    });
+    integrationStoreMock.getGlobal.mockResolvedValue({
+      defaults: { agentNotificationsEnabled: false, mentionsPolicy: "allow" },
+    });
+
+    const res = await callHandler({ channel: "#ops", text: "Done" });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "feature_disabled",
+      message: "Slack agent notifications are disabled globally.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(integrationStoreMock.getGlobal).toHaveBeenCalledWith("slack");
+    expect(integrationStoreMock.getResolvedConfig).not.toHaveBeenCalled();
+  });
+
   it("logs an audit warning with attribution on Slack-side denial (no events emitted)", async () => {
     seedActiveSession({
       parentSessionId: "parent-2",

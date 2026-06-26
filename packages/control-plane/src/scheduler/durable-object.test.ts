@@ -1082,8 +1082,8 @@ describe("SchedulerDO", () => {
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,
         target_mode: "no_repository",
-        repo_owner: null,
-        repo_name: null,
+        repo_owner: "stale-owner",
+        repo_name: "stale-repo",
         repo_id: null,
         base_branch: null,
       });
@@ -1416,8 +1416,8 @@ describe("SchedulerDO", () => {
         {
           ...sampleSlackAutomation,
           target_mode: "no_repository",
-          repo_owner: null,
-          repo_name: null,
+          repo_owner: "stale-owner",
+          repo_name: "stale-repo",
           repo_id: null,
           base_branch: null,
         },

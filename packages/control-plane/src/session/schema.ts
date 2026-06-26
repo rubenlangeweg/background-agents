@@ -400,8 +400,10 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         return;
       }
 
-      sql.exec(`DROP TABLE IF EXISTS session_new`);
-      sql.exec(`
+      sql.exec("BEGIN");
+      try {
+        sql.exec(`DROP TABLE IF EXISTS session_new`);
+        sql.exec(`
         CREATE TABLE session_new (
           id TEXT PRIMARY KEY,
           session_name TEXT,
@@ -427,7 +429,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
           updated_at INTEGER NOT NULL
         )
       `);
-      sql.exec(`
+        sql.exec(`
         INSERT INTO session_new (
           id, session_name, title, repo_owner, repo_name, repo_id, base_branch,
           branch_name, base_sha, current_sha, opencode_session_id, model,
@@ -441,8 +443,13 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
           code_server_enabled, total_cost, sandbox_settings, created_at, updated_at
         FROM session
       `);
-      sql.exec(`DROP TABLE session`);
-      sql.exec(`ALTER TABLE session_new RENAME TO session`);
+        sql.exec(`DROP TABLE session`);
+        sql.exec(`ALTER TABLE session_new RENAME TO session`);
+        sql.exec("COMMIT");
+      } catch (error) {
+        sql.exec("ROLLBACK");
+        throw error;
+      }
     },
   },
 ];

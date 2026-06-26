@@ -72,8 +72,11 @@ const RECOVERY_SWEEP_LIMIT = 50;
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function formatAutomationTargetLabel(
-  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
+  automation: Pick<AutomationRow, "target_mode" | "repo_owner" | "repo_name"> | null | undefined
 ): string {
+  if (automation?.target_mode === "no_repository") {
+    return "No repository";
+  }
   return automation?.repo_owner && automation?.repo_name
     ? `${automation.repo_owner}/${automation.repo_name}`
     : "No repository";

@@ -61,7 +61,11 @@ def build_function_timeout_seconds(build_timeout_seconds: int) -> int:
 
 
 def _repository_mode(repo_owner: str | None, repo_name: str | None) -> str:
-    return "single" if repo_owner and repo_name else "none"
+    has_owner = bool(repo_owner)
+    has_name = bool(repo_name)
+    if has_owner != has_name:
+        raise ValueError("repo_owner and repo_name must be provided together")
+    return "single" if has_owner else "none"
 
 
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:

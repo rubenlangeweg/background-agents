@@ -38,12 +38,14 @@ export function SessionHeader({
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen, toggle } = useSidebarContext();
-  const resolvedRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
-  const resolvedRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const hasFallbackSessionInfo =
+    fallbackSessionInfo.repoOwner !== null ||
+    fallbackSessionInfo.repoName !== null ||
+    fallbackSessionInfo.title !== null;
   const repoLabel = sessionState
     ? formatRepoLabel(sessionState.repoOwner, sessionState.repoName)
-    : resolvedRepoOwner && resolvedRepoName
-      ? formatRepoLabel(resolvedRepoOwner, resolvedRepoName)
+    : hasFallbackSessionInfo
+      ? formatRepoLabel(fallbackSessionInfo.repoOwner, fallbackSessionInfo.repoName)
       : "Loading session...";
   const baseResolvedTitle = sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 

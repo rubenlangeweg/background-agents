@@ -192,4 +192,43 @@ describe("applyMigrations", () => {
       expect(insert.params[1]).toBe(1000);
     }
   });
+
+  it("wraps the nullable session rebuild migration in a transaction", () => {
+    mock.setData("PRAGMA table_info(session)", [
+      { name: "repo_owner", notnull: 1 },
+      { name: "repo_name", notnull: 1 },
+      { name: "base_branch", notnull: 1 },
+    ]);
+    const migration = MIGRATIONS.find((m) => m.id === 31);
+
+    expect(typeof migration?.run).toBe("function");
+    (migration?.run as (sql: SqlStorage) => void)(mock.sql);
+
+    const queries = mock.calls.map((c) => c.query.trim());
+    expect(queries.indexOf("BEGIN")).toBeLessThan(
+      queries.findIndex((query) => query.includes("DROP TABLE IF EXISTS session_new"))
+    );
+    expect(queries.indexOf("COMMIT")).toBeGreaterThan(
+      queries.findIndex((query) => query.includes("ALTER TABLE session_new RENAME TO session"))
+    );
+  });
+
+  it("rolls back when the nullable session rebuild migration fails", () => {
+    mock.setData("PRAGMA table_info(session)", [
+      { name: "repo_owner", notnull: 1 },
+      { name: "repo_name", notnull: 1 },
+      { name: "base_branch", notnull: 1 },
+    ]);
+    const originalExec = mock.sql.exec.bind(mock.sql);
+    mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
+      if (query.includes("ALTER TABLE session_new RENAME TO session")) {
+        throw new Error("rename failed");
+      }
+      return originalExec(query, ...params);
+    };
+    const migration = MIGRATIONS.find((m) => m.id === 31);
+
+    expect(() => (migration?.run as (sql: SqlStorage) => void)(mock.sql)).toThrow("rename failed");
+    expect(mock.calls.map((c) => c.query.trim())).toContain("ROLLBACK");
+  });
 });

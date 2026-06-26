@@ -161,6 +161,35 @@ describe("toAutomation", () => {
     expect(automation.repoName).toBeNull();
     expect(automation.baseBranch).toBeNull();
   });
+
+  it("maps no_repository automations by ignoring stale legacy repo fields", () => {
+    const automation = toAutomation({
+      ...sampleRow,
+      target_mode: "no_repository",
+      repo_owner: "stale-owner",
+      repo_name: "stale-repo",
+      repo_id: 456,
+      base_branch: "stale-branch",
+    });
+
+    expect(automation.targetMode).toBe("no_repository");
+    expect(automation.repoOwner).toBeNull();
+    expect(automation.repoName).toBeNull();
+    expect(automation.baseBranch).toBeNull();
+    expect(automation.repoId).toBeNull();
+  });
+
+  it("rejects fixed repository automations missing repository fields", () => {
+    expect(() => toAutomation({ ...sampleRow, repo_name: null })).toThrow(
+      "Fixed repository automation is missing repository"
+    );
+  });
+
+  it("rejects unsupported target modes", () => {
+    expect(() => toAutomation({ ...sampleRow, target_mode: "unknown_mode" })).toThrow(
+      "Unsupported automation target mode: unknown_mode"
+    );
+  });
 });
 
 describe("toAutomationRun", () => {

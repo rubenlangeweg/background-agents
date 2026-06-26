@@ -20,7 +20,7 @@ interface InitRequest {
   sessionName: string;
   repoOwner: string | null;
   repoName: string | null;
-  repoId?: number;
+  repoId?: number | null;
   defaultBranch?: string | null;
   branch?: string | null;
   title?: string;
@@ -103,6 +103,17 @@ export function createSessionLifecycleHandler(
       const sessionId = deps.getDurableObjectId();
       const sessionName = body.sessionName;
       const now = deps.now();
+      const repoOwner = body.repoOwner?.trim() || null;
+      const repoName = body.repoName?.trim() || null;
+      const hasRepoOwner = repoOwner !== null;
+      const hasRepoName = repoName !== null;
+      const hasRepoId = body.repoId != null;
+      if (hasRepoOwner !== hasRepoName || (!hasRepoOwner && hasRepoId)) {
+        return Response.json(
+          { error: "Repository target must include repoOwner and repoName together" },
+          { status: 400 }
+        );
+      }
 
       let encryptedToken = body.scmTokenEncrypted ?? null;
       if (body.scmToken && deps.tokenEncryptionKey) {
@@ -125,16 +136,15 @@ export function createSessionLifecycleHandler(
       }
 
       const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
-      const baseBranch =
-        body.repoOwner && body.repoName ? body.branch || body.defaultBranch || "main" : null;
+      const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || "main" : null;
 
       deps.repository.upsertSession({
         id: sessionId,
         sessionName,
         title: body.title ?? null,
-        repoOwner: body.repoOwner,
-        repoName: body.repoName,
-        repoId: body.repoId ?? null,
+        repoOwner,
+        repoName,
+        repoId: hasRepoOwner ? (body.repoId ?? null) : null,
         baseBranch,
         model,
         reasoningEffort,

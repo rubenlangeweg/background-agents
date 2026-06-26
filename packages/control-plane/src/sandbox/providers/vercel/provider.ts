@@ -427,8 +427,10 @@ export class VercelSandboxProvider implements SandboxProvider {
     return {
       openinspect_framework: "open-inspect",
       openinspect_session_id: config.sessionId,
-      openinspect_repo: `${config.repoOwner}/${config.repoName}`,
       openinspect_expected_sandbox_id: config.sandboxId,
+      ...(config.repoOwner && config.repoName
+        ? { openinspect_repo: `${config.repoOwner}/${config.repoName}` }
+        : {}),
     };
   }
 
