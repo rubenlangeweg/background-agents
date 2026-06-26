@@ -71,6 +71,14 @@ const RECOVERY_SWEEP_LIMIT = 50;
  */
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+function formatAutomationTargetLabel(
+  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
+): string {
+  return automation?.repo_owner && automation?.repo_name
+    ? `${automation.repo_owner}/${automation.repo_name}`
+    : "No repository";
+}
+
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
 
@@ -733,7 +741,7 @@ export class SchedulerDO extends DurableObject<Env> {
         messageId: body.messageId ?? "",
         success: body.success,
         error: body.error,
-        repoFullName: automation ? `${automation.repo_owner}/${automation.repo_name}` : "",
+        repoFullName: formatAutomationTargetLabel(automation),
         model: automation?.model ?? "",
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
@@ -977,7 +985,7 @@ export class SchedulerDO extends DurableObject<Env> {
       threadTs: event.threadTs ?? event.ts,
       // React on (and later clear) the follow-up message itself.
       reactionMessageTs: event.ts,
-      repoFullName: `${automation.repo_owner}/${automation.repo_name}`,
+      repoFullName: formatAutomationTargetLabel(automation),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
     };

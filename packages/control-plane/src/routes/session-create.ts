@@ -3,7 +3,10 @@ import { encryptTokenPair, generateId } from "../auth/crypto";
 import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
-import { parseCreateSessionInput } from "../session/create-session-input";
+import {
+  NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR,
+  parseCreateSessionInput,
+} from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
   deriveParticipantUserId,
@@ -37,7 +40,7 @@ async function handleCreateSession(
   const body = parsed.input;
 
   if (!body.repoOwner || !body.repoName) {
-    return error("repoOwner and repoName are required");
+    return error(NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR);
   }
 
   // Validate branch name if provided (defense in depth)

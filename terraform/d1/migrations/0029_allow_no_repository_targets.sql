@@ -1,5 +1,37 @@
 -- Allow automation and session records to intentionally have no repository.
--- SQLite cannot drop NOT NULL constraints in place, so rebuild the two tables.
+-- SQLite cannot drop NOT NULL constraints in place, so rebuild the tables.
+-- automation_runs references automations(id), so back it up without the foreign
+-- key before dropping automations and recreate the final table after the parent
+-- table has been renamed.
+
+CREATE TABLE automation_runs_backup (
+  id              TEXT    PRIMARY KEY,
+  automation_id   TEXT    NOT NULL,
+  session_id      TEXT,
+  status          TEXT    NOT NULL DEFAULT 'starting',
+  skip_reason     TEXT,
+  failure_reason  TEXT,
+  scheduled_at    INTEGER NOT NULL,
+  started_at      INTEGER,
+  completed_at    INTEGER,
+  created_at      INTEGER NOT NULL,
+  trigger_key     TEXT,
+  concurrency_key TEXT,
+  trigger_run_metadata TEXT
+);
+
+INSERT INTO automation_runs_backup (
+  id, automation_id, session_id, status, skip_reason, failure_reason,
+  scheduled_at, started_at, completed_at, created_at, trigger_key,
+  concurrency_key, trigger_run_metadata
+)
+SELECT
+  id, automation_id, session_id, status, skip_reason, failure_reason,
+  scheduled_at, started_at, completed_at, created_at, trigger_key,
+  concurrency_key, trigger_run_metadata
+FROM automation_runs;
+
+DROP TABLE automation_runs;
 
 CREATE TABLE automations_new (
   id              TEXT    PRIMARY KEY,
@@ -46,6 +78,36 @@ FROM automations;
 DROP TABLE automations;
 ALTER TABLE automations_new RENAME TO automations;
 
+CREATE TABLE automation_runs (
+  id              TEXT    PRIMARY KEY,
+  automation_id   TEXT    NOT NULL,
+  session_id      TEXT,
+  status          TEXT    NOT NULL DEFAULT 'starting',
+  skip_reason     TEXT,
+  failure_reason  TEXT,
+  scheduled_at    INTEGER NOT NULL,
+  started_at      INTEGER,
+  completed_at    INTEGER,
+  created_at      INTEGER NOT NULL,
+  trigger_key     TEXT,
+  concurrency_key TEXT,
+  trigger_run_metadata TEXT,
+  FOREIGN KEY (automation_id) REFERENCES automations(id)
+);
+
+INSERT INTO automation_runs (
+  id, automation_id, session_id, status, skip_reason, failure_reason,
+  scheduled_at, started_at, completed_at, created_at, trigger_key,
+  concurrency_key, trigger_run_metadata
+)
+SELECT
+  id, automation_id, session_id, status, skip_reason, failure_reason,
+  scheduled_at, started_at, completed_at, created_at, trigger_key,
+  concurrency_key, trigger_run_metadata
+FROM automation_runs_backup;
+
+DROP TABLE automation_runs_backup;
+
 CREATE INDEX IF NOT EXISTS idx_automations_schedule_due
   ON automations (enabled, trigger_type, next_run_at)
   WHERE enabled = 1 AND deleted_at IS NULL AND trigger_type = 'schedule';
@@ -61,6 +123,40 @@ CREATE INDEX IF NOT EXISTS idx_automations_event_match
 CREATE INDEX IF NOT EXISTS idx_automations_sentry_match
   ON automations (trigger_type, event_type)
   WHERE enabled = 1 AND deleted_at IS NULL AND trigger_type = 'sentry';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_idempotency
+  ON automation_runs (automation_id, scheduled_at);
+
+CREATE INDEX IF NOT EXISTS idx_runs_automation_created
+  ON automation_runs (automation_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_runs_session
+  ON automation_runs (session_id)
+  WHERE session_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_trigger_key
+  ON automation_runs (automation_id, trigger_key)
+  WHERE trigger_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_runs_concurrency
+  ON automation_runs (automation_id, concurrency_key, status)
+  WHERE concurrency_key IS NOT NULL AND status IN ('starting', 'running');
+
+CREATE INDEX IF NOT EXISTS idx_runs_orphan_sweep
+  ON automation_runs (created_at)
+  WHERE status = 'starting';
+
+CREATE INDEX IF NOT EXISTS idx_runs_timeout_sweep
+  ON automation_runs (started_at)
+  WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_runs_active_lookup
+  ON automation_runs (automation_id, created_at DESC)
+  WHERE status IN ('starting', 'running');
+
+CREATE INDEX IF NOT EXISTS idx_runs_thread_continuity
+  ON automation_runs (automation_id, concurrency_key, created_at DESC)
+  WHERE concurrency_key IS NOT NULL AND session_id IS NOT NULL;
 
 CREATE TABLE sessions_new (
   id          TEXT    PRIMARY KEY,

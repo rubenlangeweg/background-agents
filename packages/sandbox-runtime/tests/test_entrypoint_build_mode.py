@@ -539,6 +539,7 @@ class TestNoRepositoryMode:
 
         assert supervisor.has_repository is False
         assert supervisor.boot_mode == "no_repository"
+        supervisor._ensure_credential_helper_configured.assert_not_called()
         supervisor.perform_git_sync.assert_called_once()
         supervisor._update_existing_repo.assert_not_called()
         supervisor.run_setup_script.assert_not_called()

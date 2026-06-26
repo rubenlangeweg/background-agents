@@ -1062,6 +1062,68 @@ describe("SchedulerDO", () => {
       expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("uses a no-repository label for slack completion callbacks", async () => {
+      mockStore.getRunById.mockResolvedValue({
+        id: "run-1",
+        automation_id: "auto-slack",
+        status: "running",
+        session_id: "sess-1",
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        skip_reason: null,
+        failure_reason: null,
+        trigger_run_metadata: JSON.stringify({
+          channel: "C1",
+          messageTs: "1700000000.000200",
+        }),
+      });
+      mockStore.getById.mockResolvedValue({
+        ...sampleSlackAutomation,
+        target_mode: "no_repository",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      });
+
+      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      const scheduler = createSchedulerDO(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          INTERNAL_CALLBACK_SECRET: "test-secret",
+        })
+      );
+
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-slack",
+            runId: "run-1",
+            sessionId: "sess-1",
+            messageId: "msg-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(slackFetch).toHaveBeenCalledOnce();
+      const [, init] = slackFetch.mock.calls[0];
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        channel: "C1",
+        reactionMessageTs: "1700000000.000200",
+        repoFullName: "No repository",
+        sessionId: "sess-1",
+        messageId: "msg-1",
+      });
+      expect(body.signature).toEqual(expect.any(String));
+    });
+
     it("marks run as failed and increments failures on failure", async () => {
       const scheduler = createSchedulerDO();
       const res = await scheduler.fetch(
@@ -1347,6 +1409,42 @@ describe("SchedulerDO", () => {
       // guard is never consulted (the steer short-circuits the loop).
       expect(mockStore.insertRun).not.toHaveBeenCalled();
       expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
+    });
+
+    it("uses a no-repository label when steering a no-repo automation thread", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([
+        {
+          ...sampleSlackAutomation,
+          target_mode: "no_repository",
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        },
+      ]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue({
+        id: "active-run",
+        status: "running",
+        session_id: "sess-running",
+      });
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const res = await scheduler.fetch(
+        slackEventRequest({ text: "thanks — also check the rollout" })
+      );
+
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+
+      const promptBody = await getPromptBody(fetchMock);
+      expect(promptBody.callbackContext).toMatchObject({
+        source: "slack",
+        repoFullName: "No repository",
+      });
     });
 
     it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
