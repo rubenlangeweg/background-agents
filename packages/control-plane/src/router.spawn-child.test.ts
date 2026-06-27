@@ -279,10 +279,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () =>
-        Response.json(
-          { error: "Child sessions require a repository target" },
-          { status: 400 }
-        )
+        Response.json({ error: "Child sessions require a repository target" }, { status: 400 })
       ),
     } as never;
 
