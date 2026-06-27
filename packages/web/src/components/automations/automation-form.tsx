@@ -10,6 +10,7 @@ import {
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
   type AutomationTargetMode,
+  type AutomationTargetInput,
   type AutomationEventSource,
   type TriggerCondition,
   type TriggerConfig,
@@ -23,7 +24,7 @@ import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioCard } from "@/components/ui/form-controls";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -31,7 +32,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RepoIcon, BranchIcon, ModelIcon, ChevronDownIcon } from "@/components/ui/icons";
+import {
+  RepoIcon,
+  BranchIcon,
+  ModelIcon,
+  ChevronDownIcon,
+  CheckIcon,
+  FolderIcon,
+  SearchIcon,
+} from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
@@ -55,11 +64,13 @@ const COMMON_TIMEZONES = [
 const COMMON_SET = new Set(COMMON_TIMEZONES);
 const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
 const DEFAULT_REASONING_VALUE = "__default__";
+const MAX_MULTI_REPO_TARGETS = 10;
 
 // Keep in sync with MAX_INSTRUCTIONS_LENGTH in
 // packages/control-plane/src/routes/automations.ts.
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+type RepoSelectionMode = "single" | "multiple";
 
 function requiresRepositoryTarget(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
@@ -93,6 +104,7 @@ export interface AutomationFormValues {
   repoOwner?: string;
   repoName?: string;
   baseBranch?: string;
+  targets?: AutomationTargetInput[];
   model: string;
   reasoningEffort: string | null;
   scheduleCron: string;
@@ -107,29 +119,51 @@ export interface AutomationFormValues {
 interface AutomationFormProps {
   mode: "create" | "edit";
   initialValues?: Partial<AutomationFormValues>;
+  repositorySelectionRequired?: boolean;
   onSubmit: (values: AutomationFormValues) => void;
   submitting: boolean;
 }
 
-export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
+export function AutomationForm({
+  mode,
+  initialValues,
+  repositorySelectionRequired = false,
+  onSubmit,
+  submitting,
+}: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const initialRepoKeys = useMemo(() => {
+    if (initialValues?.targets?.length) {
+      return initialValues.targets.map((target) => `${target.repoOwner}/${target.repoName}`);
+    }
+    return initialValues?.repoOwner && initialValues?.repoName
+      ? [`${initialValues.repoOwner}/${initialValues.repoName}`]
+      : [];
+  }, [initialValues?.repoName, initialValues?.repoOwner, initialValues?.targets]);
 
   const [name, setName] = useState(initialValues?.name ?? "");
-  const [targetMode, setTargetMode] = useState<AutomationTargetMode>(
-    initialValues?.targetMode ?? "fixed_single_repo"
+  const [selectedRepos, setSelectedRepos] = useState<string[]>(initialRepoKeys);
+  const [repoSelectionMode, setRepoSelectionMode] = useState<RepoSelectionMode>(() =>
+    initialValues?.targetMode === "fixed_multi_repo" || initialRepoKeys.length > 1
+      ? "multiple"
+      : "single"
   );
-  const [selectedRepo, setSelectedRepo] = useState(
-    initialValues?.repoOwner && initialValues?.repoName
-      ? `${initialValues.repoOwner}/${initialValues.repoName}`
-      : ""
-  );
+  const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
+  const [repoQuery, setRepoQuery] = useState("");
+  const selectedRepo = selectedRepos[0] ?? "";
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const usesRepository = targetMode === "fixed_single_repo";
+  const targetMode: AutomationTargetMode =
+    selectedRepos.length === 0
+      ? "no_repository"
+      : selectedRepos.length === 1
+        ? "fixed_single_repo"
+        : "fixed_multi_repo";
+  const usesSingleRepository = targetMode === "fixed_single_repo";
   const { branches, loading: loadingBranches } = useBranches(
-    usesRepository ? repoOwner : "",
-    usesRepository ? repoName : ""
+    usesSingleRepository ? repoOwner : "",
+    usesSingleRepository ? repoName : ""
   );
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
@@ -151,8 +185,20 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [sentryClientSecret, setSentryClientSecret] = useState("");
 
   const isSchedule = triggerType === "schedule";
+  const multiRepoAllowed = isSchedule;
+  const multipleSelectionEnabled = multiRepoAllowed && repoSelectionMode === "multiple";
   const isSlack = triggerType === "slack_event";
   const isScheduleValid = !isSchedule || isValidCron(scheduleCron);
+  const repoSelectionRequired = repoTargetRequired || repositorySelectionRequired;
+  const repoSelectionDescription = repoTargetRequired
+    ? "Repository-scoped triggers need exactly one repository."
+    : repositorySelectionRequired
+      ? multipleSelectionEnabled
+        ? "Select one repository or up to ten repositories."
+        : "Select one repository."
+      : multipleSelectionEnabled
+        ? "Select no repository, one repository, or up to ten repositories."
+        : "Select no repository or one repository.";
   // Mirror the server rule: a slack_event needs a slack_channel. A text_match is
   // optional — without one it fires on every message in the watched channel.
   const slackConditionsValid = !isSlack || conditions.some((c) => c.type === "slack_channel");
@@ -192,31 +238,74 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   }, [showEventTypeSelector, eventType]);
 
   useEffect(() => {
-    if (repoTargetRequired && targetMode === "no_repository") {
-      setTargetMode("fixed_single_repo");
+    if (repoTargetRequired && selectedRepos.length === 0 && repos.length > 0) {
+      const firstRepo = repos[0];
+      setSelectedRepos([firstRepo.fullName]);
+      setBaseBranch(firstRepo.defaultBranch);
     }
-  }, [repoTargetRequired, targetMode]);
+  }, [repoTargetRequired, repos, selectedRepos.length]);
 
-  const handleRepoChange = useCallback(
-    (repoFullName: string) => {
-      setSelectedRepo(repoFullName);
-      const repo = repos.find((r) => r.fullName === repoFullName);
-      if (repo) setBaseBranch(repo.defaultBranch);
+  const applySelectedRepos = useCallback(
+    (nextRepos: string[]) => {
+      setSelectedRepos(nextRepos);
+      if (nextRepos.length === 1) {
+        const repo = repos.find((r) => r.fullName === nextRepos[0]);
+        if (repo) setBaseBranch(repo.defaultBranch);
+      } else {
+        setBaseBranch("");
+      }
     },
     [repos]
   );
 
-  const handleTargetModeChange = useCallback(
-    (nextMode: AutomationTargetMode) => {
-      if (repoTargetRequired && nextMode === "no_repository") return;
-      setTargetMode(nextMode);
-      if (nextMode === "no_repository") {
-        setSelectedRepo("");
-        setBaseBranch("");
+  useEffect(() => {
+    if (!multiRepoAllowed && repoSelectionMode === "multiple") {
+      setRepoSelectionMode("single");
+    }
+  }, [multiRepoAllowed, repoSelectionMode]);
+
+  useEffect(() => {
+    if (multipleSelectionEnabled || selectedRepos.length <= 1) return;
+    applySelectedRepos([selectedRepos[0]]);
+  }, [applySelectedRepos, multipleSelectionEnabled, selectedRepos]);
+
+  const handleRepoToggle = useCallback(
+    (repoFullName: string) => {
+      if (!multipleSelectionEnabled) {
+        applySelectedRepos([repoFullName]);
+        setRepoDropdownOpen(false);
+        return;
       }
+
+      const selected = selectedRepos.includes(repoFullName);
+      if (!selected && selectedRepos.length >= MAX_MULTI_REPO_TARGETS) return;
+      const nextRepos = selected
+        ? selectedRepos.filter((repo) => repo !== repoFullName)
+        : [...selectedRepos, repoFullName];
+      applySelectedRepos(nextRepos);
     },
-    [repoTargetRequired]
+    [applySelectedRepos, multipleSelectionEnabled, selectedRepos]
   );
+
+  const handleNoRepository = useCallback(() => {
+    if (repoSelectionRequired) return;
+    applySelectedRepos([]);
+    setRepoDropdownOpen(false);
+  }, [applySelectedRepos, repoSelectionRequired]);
+
+  const handleRepoSelectionModeToggle = useCallback(() => {
+    if (!multiRepoAllowed) return;
+
+    if (repoSelectionMode === "multiple") {
+      setRepoSelectionMode("single");
+      if (selectedRepos.length > 1) {
+        applySelectedRepos([selectedRepos[0]]);
+      }
+      return;
+    }
+
+    setRepoSelectionMode("multiple");
+  }, [applySelectedRepos, multiRepoAllowed, repoSelectionMode, selectedRepos]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -225,7 +314,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     if (loadingModels) return;
     if (
       !name.trim() ||
-      (usesRepository && !selectedRepo) ||
+      (repoSelectionRequired && selectedRepos.length === 0) ||
+      selectedRepos.length > MAX_MULTI_REPO_TARGETS ||
       !instructions.trim() ||
       !isScheduleValid
     ) {
@@ -251,10 +341,15 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       instructions: instructions.trim(),
       triggerType,
     };
-    if (usesRepository) {
+    if (targetMode === "fixed_single_repo") {
       values.repoOwner = repoOwner;
       values.repoName = repoName;
       values.baseBranch = baseBranch;
+    } else if (targetMode === "fixed_multi_repo") {
+      values.targets = selectedRepos.map((repoFullName) => {
+        const [targetRepoOwner, targetRepoName] = repoFullName.split("/");
+        return { repoOwner: targetRepoOwner, repoName: targetRepoName };
+      });
     }
 
     if (!isSchedule) {
@@ -272,20 +367,40 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     }
 
     if (mode === "edit") {
-      delete (values as Partial<AutomationFormValues>).targetMode;
-      delete (values as Partial<AutomationFormValues>).repoOwner;
-      delete (values as Partial<AutomationFormValues>).repoName;
+      const initialMode = initialValues?.targetMode ?? "fixed_single_repo";
+      const initialKeys = [...initialRepoKeys].sort().join("\n");
+      const currentKeys = [...selectedRepos].sort().join("\n");
+      const targetChanged =
+        initialMode !== targetMode ||
+        initialKeys !== currentKeys ||
+        (targetMode === "fixed_single_repo" && initialValues?.baseBranch !== baseBranch);
+
+      if (!targetChanged) {
+        delete (values as Partial<AutomationFormValues>).targetMode;
+        delete (values as Partial<AutomationFormValues>).repoOwner;
+        delete (values as Partial<AutomationFormValues>).repoName;
+        delete (values as Partial<AutomationFormValues>).baseBranch;
+        delete (values as Partial<AutomationFormValues>).targets;
+      }
     }
     onSubmit(values);
   };
 
-  const selectedRepoObj = repos.find(
-    (r) => r.fullName === selectedRepo || r.fullName.toLowerCase() === selectedRepo.toLowerCase()
-  );
-  const displayRepoName = selectedRepoObj
-    ? selectedRepoObj.name
-    : selectedRepo || "Select repository";
-  const targetLabel = usesRepository ? formatRepoLabel(repoOwner, repoName) : "No repository";
+  const filteredRepos = repos.filter((repo) => {
+    const query = repoQuery.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      repo.fullName.toLowerCase().includes(query) ||
+      repo.name.toLowerCase().includes(query) ||
+      repo.owner.toLowerCase().includes(query)
+    );
+  });
+  const targetLabel =
+    multipleSelectionEnabled && selectedRepos.length > 0
+      ? `${selectedRepos.length} ${selectedRepos.length === 1 ? "repository" : "repositories"}`
+      : selectedRepos.length === 0
+        ? "No repository"
+        : formatRepoLabel(repoOwner, repoName);
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
@@ -339,76 +454,150 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         <label className="block text-sm font-medium text-foreground mb-1.5">
           Repository Configuration
         </label>
-        {mode === "create" ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <RadioCard
-              name="targetMode"
-              value="fixed_single_repo"
-              checked={targetMode === "fixed_single_repo"}
-              onChange={() => handleTargetModeChange("fixed_single_repo")}
-              label="Single repository"
-              description="Clone one repository and branch for each run."
-            />
-            <RadioCard
-              name="targetMode"
-              value="no_repository"
-              checked={targetMode === "no_repository"}
-              onChange={() => handleTargetModeChange("no_repository")}
-              disabled={repoTargetRequired}
-              label="No repository"
-              description={
-                repoTargetRequired
-                  ? "Repository-scoped triggers need a repository."
-                  : "Run without cloning a repository."
-              }
-            />
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
-            {targetMode === "no_repository" ? "No repository" : targetLabel}
-            <span className="text-xs ml-2">(cannot be changed)</span>
-          </div>
-        )}
+        <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              aria-label="Repository selection"
+            >
+              <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-left">{targetLabel}</span>
+              {multipleSelectionEnabled && selectedRepos.length > 1 && (
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {selectedRepos.length}/{MAX_MULTI_REPO_TARGETS}
+                </span>
+              )}
+              <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            className="w-[min(34rem,calc(100vw-2rem))] p-0 sm:w-[var(--radix-popover-trigger-width)]"
+          >
+            <div className="border-b border-border-muted p-2">
+              <div className="relative">
+                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={repoQuery}
+                  onChange={(event) => setRepoQuery(event.target.value)}
+                  placeholder={loadingRepos ? "Loading repositories..." : "Search repositories"}
+                  disabled={loadingRepos}
+                  autoFocus
+                  className="pl-8"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between border-b border-border-muted px-3 py-2">
+              <span className="text-xs font-medium uppercase text-muted-foreground">
+                All repositories
+              </span>
+              {multiRepoAllowed && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={handleRepoSelectionModeToggle}
+                >
+                  {multipleSelectionEnabled ? "Select One" : "Select Multiple"}
+                </Button>
+              )}
+            </div>
+            <div className="max-h-72 overflow-y-auto py-1">
+              {multipleSelectionEnabled ? (
+                <label
+                  className={cn(
+                    "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                    selectedRepos.length === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                    repoSelectionRequired && "cursor-not-allowed opacity-50"
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedRepos.length === 0}
+                    disabled={repoSelectionRequired}
+                    onChange={handleNoRepository}
+                    className="h-4 w-4 rounded border-border accent-accent"
+                  />
+                  <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span>No repository</span>
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  disabled={repoSelectionRequired}
+                  onClick={handleNoRepository}
+                  className={cn(
+                    "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                    selectedRepos.length === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                    repoSelectionRequired && "cursor-not-allowed opacity-50"
+                  )}
+                >
+                  <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">No repository</span>
+                  {selectedRepos.length === 0 && <CheckIcon className="h-4 w-4 text-accent" />}
+                </button>
+              )}
+              {filteredRepos.map((repo) => {
+                const checked = selectedRepos.includes(repo.fullName);
+                const disabled =
+                  multipleSelectionEnabled &&
+                  !checked &&
+                  selectedRepos.length >= MAX_MULTI_REPO_TARGETS &&
+                  targetMode !== "no_repository";
+
+                return multipleSelectionEnabled ? (
+                  <label
+                    key={repo.fullName}
+                    className={cn(
+                      "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                      checked ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                      disabled && "cursor-not-allowed opacity-50"
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={disabled}
+                      onChange={() => handleRepoToggle(repo.fullName)}
+                      className="h-4 w-4 rounded border-border accent-accent"
+                    />
+                    <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {repo.owner}/{repo.name}
+                    </span>
+                    {repo.private && <span className="text-xs text-muted-foreground">private</span>}
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    key={repo.fullName}
+                    onClick={() => handleRepoToggle(repo.fullName)}
+                    className={cn(
+                      "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                      checked ? "bg-muted text-foreground" : "hover:bg-muted/60"
+                    )}
+                  >
+                    <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {repo.owner}/{repo.name}
+                    </span>
+                    {repo.private && <span className="text-xs text-muted-foreground">private</span>}
+                    {checked && <CheckIcon className="h-4 w-4 shrink-0 text-accent" />}
+                  </button>
+                );
+              })}
+              {filteredRepos.length === 0 && (
+                <div className="px-3 py-3 text-sm text-muted-foreground">No repositories found</div>
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+        <FieldDescription>{repoSelectionDescription}</FieldDescription>
       </div>
 
-      {/* Repository */}
-      {usesRepository && (
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
-          <Combobox
-            value={selectedRepo}
-            onChange={handleRepoChange}
-            items={repos.map((repo) => ({
-              value: repo.fullName,
-              label: repo.name,
-              description: `${repo.owner}${repo.private ? " \u2022 private" : ""}`,
-            }))}
-            searchable
-            searchPlaceholder="Search repositories..."
-            filterFn={(option, query) =>
-              option.label.toLowerCase().includes(query) ||
-              (option.description?.toLowerCase().includes(query) ?? false) ||
-              String(option.value).toLowerCase().includes(query)
-            }
-            dropdownWidth="w-72"
-            disabled={loadingRepos || mode === "edit"}
-            triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
-          >
-            <RepoIcon className="w-4 h-4 text-muted-foreground" />
-            <span className="truncate flex-1 text-left">
-              {loadingRepos ? "Loading..." : displayRepoName}
-            </span>
-            <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-          </Combobox>
-          <FieldDescription>
-            Runs clone and execute against this repository.
-            {mode === "edit" ? " The repository cannot be changed after creation." : ""}
-          </FieldDescription>
-        </div>
-      )}
-
       {/* Branch */}
-      {usesRepository && (
+      {usesSingleRepository && (
         <div>
           <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
           <Combobox
@@ -664,7 +853,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             submitting ||
             loadingModels ||
             !name.trim() ||
-            (usesRepository && !selectedRepo) ||
+            (repoSelectionRequired && selectedRepos.length === 0) ||
+            selectedRepos.length > MAX_MULTI_REPO_TARGETS ||
             !instructions.trim() ||
             !isScheduleValid ||
             !slackConditionsValid ||

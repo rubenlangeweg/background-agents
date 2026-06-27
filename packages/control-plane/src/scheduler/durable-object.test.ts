@@ -43,6 +43,14 @@ function createMockStore() {
     getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
     recordSkippedRun: vi.fn().mockResolvedValue(undefined),
     createRunAndAdvanceSchedule: vi.fn().mockResolvedValue(undefined),
+    createRunGroupAndAdvanceSchedule: vi.fn().mockResolvedValue(undefined),
+    insertRunGroup: vi.fn().mockResolvedValue(undefined),
+    updateRunGroup: vi.fn().mockResolvedValue(undefined),
+    getActiveRunGroupForAutomation: vi.fn().mockResolvedValue(null),
+    getRunGroupSummary: vi.fn().mockResolvedValue(null),
+    listRunsForGroup: vi.fn().mockResolvedValue([]),
+    getTargetsForAutomation: vi.fn().mockResolvedValue([]),
+    tryMarkRunGroupFailureCounted: vi.fn().mockResolvedValue(true),
     insertRun: vi.fn().mockResolvedValue(undefined),
     updateRun: vi.fn().mockResolvedValue(undefined),
     getById: vi.fn().mockResolvedValue(null),
@@ -50,12 +58,14 @@ function createMockStore() {
     countOverdue: vi.fn().mockResolvedValue(0),
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
     getTimedOutRunningRuns: vi.fn().mockResolvedValue([]),
+    getOrphanedActiveRunGroups: vi.fn().mockResolvedValue([]),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
     bulkFailRuns: vi.fn().mockResolvedValue(undefined),
     bulkIncrementFailures: vi.fn().mockResolvedValue(new Map()),
+    failRunGroup: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -66,6 +76,7 @@ vi.mock("../db/automation-store", () => ({
     return mockStore;
   }),
   toAutomationRun: vi.fn((row: unknown) => row),
+  toAutomationRunGroup: vi.fn((row: unknown) => row),
 }));
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
@@ -263,6 +274,63 @@ const sampleSlackAutomation = {
   }),
 };
 
+function multiRepoAutomation(overrides: Record<string, unknown> = {}) {
+  return {
+    ...sampleAutomation,
+    target_mode: "fixed_multi_repo",
+    repo_owner: null,
+    repo_name: null,
+    repo_id: null,
+    base_branch: null,
+    ...overrides,
+  };
+}
+
+function automationTarget(repoName: string, overrides: Record<string, unknown> = {}) {
+  const repoIds: Record<string, number> = {
+    "web-app": 12345,
+    api: 67890,
+    docs: 11223,
+  };
+  return {
+    automation_id: "auto-1",
+    repo_owner: "acme",
+    repo_name: repoName,
+    repo_id: repoIds[repoName] ?? 12345,
+    base_branch: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function multiRepoTargets(...repoNames: string[]) {
+  return repoNames.map((repoName) => automationTarget(repoName));
+}
+
+function runGroupSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "group-1",
+    automation_id: "auto-1",
+    status: "running",
+    skip_reason: null,
+    failure_reason: null,
+    scheduled_at: now,
+    started_at: now,
+    completed_at: null,
+    created_at: now,
+    updated_at: now,
+    failure_counted_at: null,
+    total_runs: 3,
+    starting_runs: 0,
+    running_runs: 0,
+    completed_runs: 0,
+    failed_runs: 0,
+    skipped_runs: 0,
+    ...overrides,
+  };
+}
+
 function makeSlackEvent(overrides?: Record<string, unknown>) {
   const ts = "1700000000.000200";
   return {
@@ -351,6 +419,115 @@ describe("SchedulerDO", () => {
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
+    });
+
+    it("counts a scheduled fixed_multi_repo group as one processed automation", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
+      mockStore.getTargetsForAutomation.mockResolvedValue(
+        multiRepoTargets("web-app", "api", "docs")
+      );
+      mockStore.getRunGroupSummary.mockResolvedValue(runGroupSummary({ running_runs: 3 }));
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
+      expect(body).toEqual({ processed: 1, skipped: 0, failed: 0 });
+      expect(mockStore.createRunGroupAndAdvanceSchedule).toHaveBeenCalledTimes(1);
+      expect(mockStore.createRunAndAdvanceSchedule).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps scheduled fixed_multi_repo siblings running when one target becomes inaccessible", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
+      mockStore.getTargetsForAutomation.mockResolvedValue(
+        multiRepoTargets("web-app", "api", "docs")
+      );
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) =>
+          name === "api"
+            ? null
+            : {
+                repoId: name === "docs" ? 11223 : 12345,
+                repoOwner: "acme",
+                repoName: name,
+                defaultBranch: "main",
+              }
+      );
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({ running_runs: 2, failed_runs: 1 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ processed: 1, skipped: 0, failed: 0 });
+      expect(mockStore.insertRun).toHaveBeenCalledTimes(3);
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: "Repository is not accessible for the configured SCM provider",
+        })
+      );
+      expect(
+        mockStore.updateRun.mock.calls.filter(([, fields]) => fields.status === "running")
+      ).toHaveLength(2);
+      const [createdGroup] = mockStore.createRunGroupAndAdvanceSchedule.mock.calls[0];
+      expect(mockStore.updateRunGroup).toHaveBeenCalledWith(
+        createdGroup.id,
+        expect.objectContaining({
+          status: "partial_failed",
+          completed_at: null,
+        })
+      );
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("does not count skipped fixed_multi_repo groups as failures", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
+      mockStore.getActiveRunGroupForAutomation.mockResolvedValue({
+        id: "active-group",
+        automation_id: "auto-1",
+        status: "running",
+        skip_reason: null,
+        failure_reason: null,
+        scheduled_at: now - 60_000,
+        started_at: now - 60_000,
+        completed_at: null,
+        created_at: now - 60_000,
+        updated_at: now - 60_000,
+        failure_counted_at: null,
+      });
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ processed: 0, skipped: 1, failed: 0 });
+      expect(mockStore.createRunGroupAndAdvanceSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automation_id: "auto-1",
+          status: "skipped",
+          skip_reason: "concurrent_run_active",
+          completed_at: expect.any(Number),
+        }),
+        "auto-1",
+        expect.any(Number)
+      );
+      expect(mockStore.getTargetsForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
+      expect(mockStore.tryMarkRunGroupFailureCounted).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.autoPause).not.toHaveBeenCalled();
     });
 
     it("passes automation reasoning effort into created sessions", async () => {
@@ -685,6 +862,37 @@ describe("SchedulerDO", () => {
         "execution_timeout",
         expect.any(Number)
       );
+    });
+
+    it("recovers orphaned active run groups with no child runs", async () => {
+      const orphanedGroup = {
+        id: "group-1",
+        automation_id: "auto-1",
+        status: "starting",
+        skip_reason: null,
+        failure_reason: null,
+        scheduled_at: now - 10 * 60 * 1000,
+        started_at: now - 10 * 60 * 1000,
+        completed_at: null,
+        created_at: now - 10 * 60 * 1000,
+        updated_at: now - 10 * 60 * 1000,
+        failure_counted_at: null,
+      };
+      mockStore.getOrphanedActiveRunGroups.mockResolvedValue([orphanedGroup]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.failRunGroup).toHaveBeenCalledWith(
+        "group-1",
+        "group_start_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.tryMarkRunGroupFailureCounted).toHaveBeenCalledWith(
+        "group-1",
+        expect.any(Number)
+      );
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
     it("recovers one category when the other recovery query fails", async () => {
@@ -1149,6 +1357,146 @@ describe("SchedulerDO", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("marks grouped runs partial_failed and counts failure while siblings still run", async () => {
+      mockStore.getRunById.mockResolvedValue({
+        id: "run-1",
+        automation_id: "auto-1",
+        status: "running",
+        session_id: "sess-1",
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        skip_reason: null,
+        failure_reason: null,
+        group_id: "group-1",
+      });
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({ running_runs: 2, failed_runs: 1 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: false,
+            error: "Repository access failed",
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.updateRun).toHaveBeenCalledTimes(1);
+      expect(mockStore.updateRunGroup).toHaveBeenCalledWith("group-1", {
+        status: "partial_failed",
+        completed_at: null,
+      });
+      expect(mockStore.tryMarkRunGroupFailureCounted).toHaveBeenCalledWith(
+        "group-1",
+        expect.any(Number)
+      );
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("resets failures when a grouped run completes successfully", async () => {
+      mockStore.getRunById.mockResolvedValue({
+        id: "run-1",
+        automation_id: "auto-1",
+        status: "running",
+        session_id: "sess-1",
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        skip_reason: null,
+        failure_reason: null,
+        group_id: "group-1",
+      });
+      mockStore.getRunGroupSummary.mockResolvedValue(runGroupSummary({ completed_runs: 3 }));
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: true,
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
+        status: "completed",
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.updateRunGroup).toHaveBeenCalledWith("group-1", {
+        status: "completed",
+        completed_at: expect.any(Number),
+      });
+      expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.createRunGroupAndAdvanceSchedule).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+    });
+
+    it("auto-pauses after partial_failed grouped runs reach the failure threshold", async () => {
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.getRunById.mockResolvedValue({
+        id: "run-1",
+        automation_id: "auto-1",
+        status: "running",
+        session_id: "sess-1",
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        skip_reason: null,
+        failure_reason: null,
+        group_id: "group-1",
+      });
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({ running_runs: 2, failed_runs: 1 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/run-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            automationId: "auto-1",
+            runId: "run-1",
+            sessionId: "sess-1",
+            success: false,
+            error: "Repository access failed",
+          }),
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockStore.updateRunGroup).toHaveBeenCalledWith("group-1", {
+        status: "partial_failed",
+        completed_at: null,
+      });
+      expect(mockStore.tryMarkRunGroupFailureCounted).toHaveBeenCalledWith(
+        "group-1",
+        expect.any(Number)
+      );
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.bulkFailRuns).not.toHaveBeenCalled();
+      expect(mockStore.failRunGroup).not.toHaveBeenCalled();
+    });
+
     it("ignores callback for already-completed run", async () => {
       mockStore.getRunById.mockResolvedValue({
         id: "run-1",
@@ -1290,6 +1638,159 @@ describe("SchedulerDO", () => {
         expect.any(String),
         expect.objectContaining({ status: "running" })
       );
+    });
+
+    it("creates a grouped run and child sessions for fixed_multi_repo trigger", async () => {
+      mockStore.getById.mockResolvedValue(multiRepoAutomation());
+      mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({ total_runs: 2, running_runs: 2 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-1" }),
+        })
+      );
+
+      expect(res.status).toBe(201);
+      expect(mockStore.insertRunGroup).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-1", status: "starting" })
+      );
+      expect(mockStore.createRunGroupAndAdvanceSchedule).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).toHaveBeenCalledTimes(2);
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automation_id: "auto-1",
+          status: "starting",
+          target_repo_owner: "acme",
+          target_repo_name: "web-app",
+        })
+      );
+      expect(mockStore.insertRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automation_id: "auto-1",
+          status: "starting",
+          target_repo_owner: "acme",
+          target_repo_name: "api",
+        })
+      );
+      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+    });
+
+    it("allows manual fixed_multi_repo trigger while automation is paused", async () => {
+      mockStore.getById.mockResolvedValue(multiRepoAutomation({ enabled: 0, next_run_at: null }));
+      mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({ total_runs: 2, running_runs: 2 })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-1" }),
+        })
+      );
+
+      expect(res.status).toBe(201);
+      expect(mockStore.insertRunGroup).toHaveBeenCalledWith(
+        expect.objectContaining({ automation_id: "auto-1", status: "starting" })
+      );
+      expect(mockStore.createRunGroupAndAdvanceSchedule).not.toHaveBeenCalled();
+      expect(mockStore.update).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).toHaveBeenCalledTimes(2);
+      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+    });
+
+    it("counts manual fixed_multi_repo partial failures toward auto-pause", async () => {
+      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
+      mockStore.getById.mockResolvedValue(multiRepoAutomation());
+      mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
+      mockCheckRepositoryAccess.mockImplementation(
+        async ({ name }: { owner: string; name: string }) =>
+          name === "api"
+            ? null
+            : {
+                repoId: 12345,
+                repoOwner: "acme",
+                repoName: name,
+                defaultBranch: "main",
+              }
+      );
+      mockStore.getRunGroupSummary.mockResolvedValue(
+        runGroupSummary({
+          status: "partial_failed",
+          total_runs: 2,
+          running_runs: 1,
+          failed_runs: 1,
+        })
+      );
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-1" }),
+        })
+      );
+
+      expect(res.status).toBe(201);
+      const [group] = mockStore.insertRunGroup.mock.calls[0];
+      expect(mockStore.updateRunGroup).toHaveBeenCalledWith(group.id, {
+        status: "partial_failed",
+        completed_at: null,
+      });
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: "Repository is not accessible for the configured SCM provider",
+        })
+      );
+      expect(mockStore.tryMarkRunGroupFailureCounted).toHaveBeenCalledWith(
+        group.id,
+        expect.any(Number)
+      );
+      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
+    });
+
+    it("returns 409 for fixed_multi_repo trigger when an active group exists", async () => {
+      mockStore.getById.mockResolvedValue(multiRepoAutomation());
+      mockStore.getActiveRunGroupForAutomation.mockResolvedValue({
+        id: "group-active",
+        automation_id: "auto-1",
+        status: "running",
+        skip_reason: null,
+        failure_reason: null,
+        scheduled_at: now,
+        started_at: now,
+        completed_at: null,
+        created_at: now,
+        updated_at: now,
+        failure_counted_at: null,
+      });
+
+      const scheduler = createSchedulerDO();
+      const res = await scheduler.fetch(
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-1" }),
+        })
+      );
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "An active run already exists" });
+      expect(mockStore.insertRunGroup).not.toHaveBeenCalled();
+      expect(mockStore.insertRun).not.toHaveBeenCalled();
     });
 
     it("returns the normal 500 response when failRunAndTrack itself throws", async () => {

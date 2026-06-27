@@ -746,8 +746,27 @@ export type AutomationTriggerType =
   | "slack_event";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+export type AutomationRunGroupStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial_failed"
+  | "skipped";
 
-export type AutomationTargetMode = "fixed_single_repo" | "no_repository";
+export type AutomationTargetMode = "fixed_single_repo" | "fixed_multi_repo" | "no_repository";
+
+export interface AutomationTarget {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string | null;
+}
+
+export interface AutomationTargetInput {
+  repoOwner: string;
+  repoName: string;
+}
 
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
@@ -760,6 +779,7 @@ export interface Automation {
   repoName: string | null;
   baseBranch: string | null;
   repoId: number | null;
+  targets: AutomationTarget[];
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;
@@ -783,6 +803,7 @@ export interface CreateAutomationRequest {
   repoOwner?: string;
   repoName?: string;
   baseBranch?: string;
+  targets?: AutomationTargetInput[];
   instructions: string;
   triggerType?: AutomationTriggerType;
   scheduleCron?: string;
@@ -796,12 +817,16 @@ export interface CreateAutomationRequest {
 
 export interface UpdateAutomationRequest {
   name?: string;
+  targetMode?: AutomationTargetMode;
+  repoOwner?: string;
+  repoName?: string;
   instructions?: string;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
   baseBranch?: string;
+  targets?: AutomationTargetInput[];
   eventType?: string;
   triggerConfig?: TriggerConfig;
 }
@@ -821,6 +846,31 @@ export interface AutomationRun {
   artifactSummary: string | null;
   triggerKey: string | null;
   concurrencyKey: string | null;
+  groupId: string | null;
+  targetRepoOwner: string | null;
+  targetRepoName: string | null;
+  targetRepoId: number | null;
+  targetBaseBranch: string | null;
+}
+
+export interface AutomationRunGroup {
+  id: string;
+  automationId: string;
+  status: AutomationRunGroupStatus;
+  skipReason: string | null;
+  failureReason: string | null;
+  scheduledAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  totalRuns: number;
+  startingRuns: number;
+  runningRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  skippedRuns: number;
+  runs: AutomationRun[];
 }
 
 export interface ListAutomationsResponse {
@@ -830,6 +880,7 @@ export interface ListAutomationsResponse {
 
 export interface ListAutomationRunsResponse {
   runs: AutomationRun[];
+  groups?: AutomationRunGroup[];
   total: number;
 }
 

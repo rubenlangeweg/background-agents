@@ -5,6 +5,7 @@ import {
   toAutomation,
   toAutomationRun,
   type AutomationRow,
+  type AutomationRunGroupRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -55,6 +56,27 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     created_at: now,
     trigger_key: null,
     concurrency_key: null,
+    ...overrides,
+  };
+}
+
+function makeRunGroup(
+  automationId: string,
+  overrides?: Partial<AutomationRunGroupRow>
+): AutomationRunGroupRow {
+  const now = Date.now();
+  return {
+    id: `group-${Math.random().toString(36).slice(2, 8)}`,
+    automation_id: automationId,
+    status: "starting",
+    skip_reason: null,
+    failure_reason: null,
+    scheduled_at: now,
+    started_at: now,
+    completed_at: null,
+    created_at: now,
+    updated_at: now,
+    failure_counted_at: null,
     ...overrides,
   };
 }
@@ -404,6 +426,36 @@ describe("AutomationStore (D1 integration)", () => {
       expect(active).toBeNull();
     });
 
+    it("treats partial_failed groups without completed_at as active", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-active-partial" }));
+      await store.create(makeAutomation({ id: "auto-terminal-partial" }));
+
+      await store.insertRunGroup(
+        makeRunGroup("auto-active-partial", {
+          id: "group-active-partial",
+          status: "partial_failed",
+          completed_at: null,
+          created_at: now,
+        })
+      );
+      await store.insertRunGroup(
+        makeRunGroup("auto-terminal-partial", {
+          id: "group-terminal-partial",
+          status: "partial_failed",
+          completed_at: now,
+          created_at: now,
+        })
+      );
+
+      const active = await store.getActiveRunGroupForAutomation("auto-active-partial");
+      expect(active?.id).toBe("group-active-partial");
+
+      const terminal = await store.getActiveRunGroupForAutomation("auto-terminal-partial");
+      expect(terminal).toBeNull();
+    });
+
     it("lists runs with pagination", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -468,6 +520,21 @@ describe("AutomationStore (D1 integration)", () => {
       const mapped = toAutomationRun(run!);
       expect(mapped.sessionTitle).toBe("Auto Session Title");
       expect(mapped.sessionId).toBe("sess-enriched");
+    });
+
+    it("detects history from ungrouped runs and grouped runs", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-history-run" }));
+      await store.create(makeAutomation({ id: "auto-history-group" }));
+      await store.create(makeAutomation({ id: "auto-history-empty" }));
+
+      expect(await store.hasRunHistory("auto-history-empty")).toBe(false);
+
+      await store.insertRun(makeRun("auto-history-run", { id: "run-history-1" }));
+      expect(await store.hasRunHistory("auto-history-run")).toBe(true);
+
+      await store.insertRunGroup(makeRunGroup("auto-history-group", { id: "group-history-1" }));
+      expect(await store.hasRunHistory("auto-history-group")).toBe(true);
     });
   });
 
@@ -636,12 +703,21 @@ describe("AutomationStore (D1 integration)", () => {
 
     it("resets consecutive failures to zero", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-f2", consecutive_failures: 5 }));
+      await store.create(
+        makeAutomation({
+          id: "auto-f2",
+          enabled: 0,
+          next_run_at: null,
+          consecutive_failures: 5,
+        })
+      );
 
       await store.resetConsecutiveFailures("auto-f2");
 
       const row = await store.getById("auto-f2");
       expect(row!.consecutive_failures).toBe(0);
+      expect(row!.enabled).toBe(0);
+      expect(row!.next_run_at).toBeNull();
     });
 
     it("auto-pauses automation (disables + clears next_run_at)", async () => {
@@ -655,6 +731,31 @@ describe("AutomationStore (D1 integration)", () => {
       const row = await store.getById("auto-f3");
       expect(row!.enabled).toBe(0);
       expect(row!.next_run_at).toBeNull();
+    });
+
+    it("fails active partial_failed run groups during recovery", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const completedAt = now + 1000;
+      await store.create(makeAutomation({ id: "auto-f4" }));
+      await store.insertRunGroup(
+        makeRunGroup("auto-f4", {
+          id: "group-f4",
+          status: "partial_failed",
+          completed_at: null,
+          created_at: now,
+        })
+      );
+
+      await store.failRunGroup("group-f4", "group_start_timeout", completedAt);
+
+      const group = await store.getRunGroupSummary("group-f4");
+      expect(group).toMatchObject({
+        status: "failed",
+        failure_reason: "group_start_timeout",
+        completed_at: completedAt,
+      });
+      await expect(store.getActiveRunGroupForAutomation("auto-f4")).resolves.toBeNull();
     });
   });
 

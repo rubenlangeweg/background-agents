@@ -1,4 +1,5 @@
 import type { AutomationRow } from "../db/automation-store";
+import type { AutomationTargetRow } from "../db/automation-store";
 import type { Env } from "../types";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 
@@ -42,5 +43,34 @@ export async function resolveAutomationTarget(
     repoName: access.repoName,
     repoId: access.repoId,
     baseBranch: automation.base_branch?.trim() || access.defaultBranch || "main",
+  };
+}
+
+export async function resolveAutomationTargetRow(
+  env: Env,
+  target: AutomationTargetRow,
+  sourceControlProvider?: SourceControlProvider
+): Promise<{
+  repoOwner: string;
+  repoName: string;
+  repoId: number;
+  baseBranch: string;
+}> {
+  const provider = sourceControlProvider ?? createSourceControlProviderFromEnv(env);
+
+  const access = await provider.checkRepositoryAccess({
+    owner: target.repo_owner,
+    name: target.repo_name,
+  });
+
+  if (!access) {
+    throw new Error("Repository is not accessible for the configured SCM provider");
+  }
+
+  return {
+    repoOwner: access.repoOwner,
+    repoName: access.repoName,
+    repoId: access.repoId,
+    baseBranch: target.base_branch?.trim() || access.defaultBranch || "main",
   };
 }

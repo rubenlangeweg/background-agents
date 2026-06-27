@@ -18,6 +18,19 @@ import { formatRepoLabel } from "@/lib/repo-label";
 
 const RUNS_PAGE_SIZE = 20;
 
+function formatAutomationTargetLabel(automation: {
+  targetMode: string;
+  repoOwner: string | null;
+  repoName: string | null;
+  targets?: unknown[];
+}): string {
+  if (automation.targetMode === "fixed_multi_repo") {
+    const count = automation.targets?.length ?? 0;
+    return `${count} ${count === 1 ? "repository" : "repositories"}`;
+  }
+  return formatRepoLabel(automation.repoOwner, automation.repoName);
+}
+
 export default function AutomationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen, toggle } = useSidebarContext();
@@ -26,6 +39,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const [runsOffset, setRunsOffset] = useState(0);
   const {
     runs,
+    groups,
     total: totalRuns,
     loading: loadingRuns,
     mutate: mutateRuns,
@@ -130,7 +144,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <AutomationStatusBadge automation={automation} />
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {formatRepoLabel(automation.repoOwner, automation.repoName)}
+                {formatAutomationTargetLabel(automation)}
                 {automation.baseBranch && ` · ${automation.baseBranch}`}
               </p>
             </div>
@@ -281,9 +295,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
             <h2 className="text-lg font-medium text-foreground mb-3">Run History</h2>
             <RunHistory
               runs={runs}
+              groups={groups}
               total={totalRuns}
               loading={loadingRuns}
-              hasMore={runs.length < totalRuns}
+              hasMore={(groups.length > 0 ? groups.length : runs.length) < totalRuns}
               onLoadMore={() => setRunsOffset((prev) => prev + RUNS_PAGE_SIZE)}
             />
           </div>

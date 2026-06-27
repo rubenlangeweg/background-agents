@@ -44,6 +44,7 @@ export function useAutomationRuns(id: string | undefined, limit = 20, offset = 0
 
   return {
     runs: data?.runs ?? [],
+    groups: data?.groups ?? [],
     total: data?.total ?? 0,
     loading: isLoading,
     mutate,

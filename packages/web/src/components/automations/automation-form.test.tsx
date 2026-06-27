@@ -16,24 +16,54 @@ afterEach(cleanup);
 // Mutable per-test enabled set; the hoisted use-enabled-models mock closes over it.
 let enabledModelsValue: string[] = ["openai/gpt-5.4"];
 let loadingModelsValue = false;
+let reposValue = [
+  {
+    id: 1,
+    fullName: "open-inspect/background-agents",
+    owner: "open-inspect",
+    name: "background-agents",
+    description: null,
+    private: false,
+    defaultBranch: "main",
+  },
+  {
+    id: 2,
+    fullName: "open-inspect/control-plane",
+    owner: "open-inspect",
+    name: "control-plane",
+    description: null,
+    private: false,
+    defaultBranch: "main",
+  },
+];
 beforeEach(() => {
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
+  reposValue = [
+    {
+      id: 1,
+      fullName: "open-inspect/background-agents",
+      owner: "open-inspect",
+      name: "background-agents",
+      description: null,
+      private: false,
+      defaultBranch: "main",
+    },
+    {
+      id: 2,
+      fullName: "open-inspect/control-plane",
+      owner: "open-inspect",
+      name: "control-plane",
+      description: null,
+      private: false,
+      defaultBranch: "main",
+    },
+  ];
 });
 
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
-    repos: [
-      {
-        id: 1,
-        fullName: "open-inspect/background-agents",
-        owner: "open-inspect",
-        name: "background-agents",
-        description: null,
-        private: false,
-        defaultBranch: "main",
-      },
-    ],
+    repos: reposValue,
     loading: false,
   }),
 }));
@@ -159,11 +189,10 @@ describe("automation cron submission", () => {
       />
     );
 
-    expect(screen.getByText("Select repository")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("No repository"));
-
-    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
+    expect(screen.getAllByText("No repository").length).toBeGreaterThan(0);
+    expect(screen.getByText("Select no repository or one repository.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+    expect(screen.getByRole("button", { name: "Select Multiple" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
 
     fireEvent.submit(container.querySelector("form")!);
@@ -179,8 +208,76 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0].baseBranch).toBeUndefined();
   });
 
-  it("disables no_repository for GitHub event automations", () => {
+  it("keeps scheduled repository selection single until multi-select is enabled", () => {
+    const onSubmit = vi.fn();
     const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Weekly review",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+    fireEvent.click(screen.getByRole("button", { name: "open-inspect/background-agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+    fireEvent.click(screen.getByRole("button", { name: "open-inspect/control-plane" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      targetMode: "fixed_single_repo",
+      repoOwner: "open-inspect",
+      repoName: "control-plane",
+    });
+    expect(onSubmit.mock.calls[0][0].targets).toBeUndefined();
+  });
+
+  it("submits multiple repositories after enabling multi-select", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Weekly review",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Review the repos.",
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
+    fireEvent.click(screen.getByLabelText("open-inspect/background-agents"));
+    fireEvent.click(screen.getByLabelText("open-inspect/control-plane"));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(screen.getByRole("button", { name: "Select One" })).toBeInTheDocument();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      targetMode: "fixed_multi_repo",
+      targets: [
+        { repoOwner: "open-inspect", repoName: "background-agents" },
+        { repoOwner: "open-inspect", repoName: "control-plane" },
+      ],
+    });
+    expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
+  });
+
+  it("selects a repository for GitHub event automations", () => {
+    render(
       <AutomationForm
         mode="create"
         submitting={false}
@@ -192,19 +289,33 @@ describe("automation cron submission", () => {
         }}
       />
     );
-    const noRepositoryRadio = () =>
-      container.querySelector<HTMLInputElement>('input[value="no_repository"]')!;
-    const singleRepositoryRadio = () =>
-      container.querySelector<HTMLInputElement>('input[value="fixed_single_repo"]')!;
-
-    fireEvent.click(screen.getByText("No repository"));
-    expect(screen.queryByText("Select repository")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
 
-    expect(noRepositoryRadio()).toBeDisabled();
-    expect(singleRepositoryRadio()).toBeChecked();
-    expect(screen.getByText("Select repository")).toBeInTheDocument();
+    expect(screen.getAllByText("open-inspect/background-agents").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Repository-scoped triggers need exactly one repository.")
+    ).toBeInTheDocument();
+  });
+
+  it("describes optional non-schedule repository selection as one repository max", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Inspect Sentry alerts",
+          model: "openai/gpt-5.4",
+          instructions: "Triage recent alerts.",
+          triggerType: "sentry",
+          eventType: "issue.created",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Select no repository or one repository.")).toBeInTheDocument();
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {

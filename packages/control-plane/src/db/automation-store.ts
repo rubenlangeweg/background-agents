@@ -8,7 +8,10 @@
 import type {
   Automation,
   AutomationRun,
+  AutomationRunGroup,
+  AutomationRunGroupStatus,
   AutomationRunStatus,
+  AutomationTarget,
   TriggerConfig,
 } from "@open-inspect/shared";
 
@@ -54,6 +57,11 @@ export interface AutomationRunRow {
   created_at: number;
   trigger_key: string | null;
   concurrency_key: string | null;
+  group_id?: string | null;
+  target_repo_owner?: string | null;
+  target_repo_name?: string | null;
+  target_repo_id?: number | null;
+  target_base_branch?: string | null;
   // Source-specific run metadata as JSON (slack-origin runs only today; absent
   // otherwise). Opaque to the store — interpreted by the owning source's layer.
   trigger_run_metadata?: string | null;
@@ -64,11 +72,50 @@ export interface EnrichedRunRow extends AutomationRunRow {
   artifact_summary: string | null;
 }
 
+export interface AutomationTargetRow {
+  automation_id: string;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AutomationRunGroupRow {
+  id: string;
+  automation_id: string;
+  status: AutomationRunGroupStatus;
+  skip_reason: string | null;
+  failure_reason: string | null;
+  scheduled_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  created_at: number;
+  updated_at: number;
+  failure_counted_at: number | null;
+}
+
+export interface EnrichedRunGroupRow extends AutomationRunGroupRow {
+  total_runs: number;
+  starting_runs: number;
+  running_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  skipped_runs: number;
+  runs?: EnrichedRunRow[];
+}
+
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
-function automationTargetMode(row: AutomationRow): "fixed_single_repo" | "no_repository" {
+function automationTargetMode(
+  row: AutomationRow
+): "fixed_single_repo" | "fixed_multi_repo" | "no_repository" {
   if (row.target_mode == null || row.target_mode === "fixed_single_repo") {
     return "fixed_single_repo";
+  }
+  if (row.target_mode === "fixed_multi_repo") {
+    return "fixed_multi_repo";
   }
   if (row.target_mode === "no_repository") {
     return "no_repository";
@@ -76,11 +123,15 @@ function automationTargetMode(row: AutomationRow): "fixed_single_repo" | "no_rep
   throw new Error(`Unsupported automation target mode: ${row.target_mode}`);
 }
 
-export function toAutomation(row: AutomationRow): Automation {
+export function toAutomation(
+  row: AutomationRow,
+  targetRows: AutomationTargetRow[] = []
+): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
     : null;
   const targetMode = automationTargetMode(row);
+  const targets = targetRows.map(toAutomationTarget);
   const base = {
     id: row.id,
     name: row.name,
@@ -99,9 +150,22 @@ export function toAutomation(row: AutomationRow): Automation {
     deletedAt: row.deleted_at,
     eventType: row.event_type ?? null,
     triggerConfig,
+    targets,
   };
 
   if (targetMode === "no_repository") {
+    return {
+      ...base,
+      targetMode,
+      repoOwner: null,
+      repoName: null,
+      baseBranch: null,
+      repoId: null,
+      targets: [],
+    };
+  }
+
+  if (targetMode === "fixed_multi_repo") {
     return {
       ...base,
       targetMode,
@@ -123,6 +187,17 @@ export function toAutomation(row: AutomationRow): Automation {
     repoName: row.repo_name,
     baseBranch: row.base_branch,
     repoId: row.repo_id,
+    targets:
+      targets.length > 0
+        ? targets
+        : [
+            {
+              repoOwner: row.repo_owner,
+              repoName: row.repo_name,
+              repoId: row.repo_id,
+              baseBranch: row.base_branch,
+            },
+          ],
   };
 }
 
@@ -142,6 +217,42 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     artifactSummary: row.artifact_summary,
     triggerKey: row.trigger_key ?? null,
     concurrencyKey: row.concurrency_key ?? null,
+    groupId: row.group_id ?? null,
+    targetRepoOwner: row.target_repo_owner ?? null,
+    targetRepoName: row.target_repo_name ?? null,
+    targetRepoId: row.target_repo_id ?? null,
+    targetBaseBranch: row.target_base_branch ?? null,
+  };
+}
+
+export function toAutomationTarget(row: AutomationTargetRow): AutomationTarget {
+  return {
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    repoId: row.repo_id,
+    baseBranch: row.base_branch,
+  };
+}
+
+export function toAutomationRunGroup(row: EnrichedRunGroupRow): AutomationRunGroup {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    status: row.status,
+    skipReason: row.skip_reason,
+    failureReason: row.failure_reason,
+    scheduledAt: row.scheduled_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    totalRuns: row.total_runs,
+    startingRuns: row.starting_runs,
+    runningRuns: row.running_runs,
+    completedRuns: row.completed_runs,
+    failedRuns: row.failed_runs,
+    skippedRuns: row.skipped_runs,
+    runs: (row.runs ?? []).map(toAutomationRun),
   };
 }
 
@@ -198,6 +309,31 @@ export class AutomationStore {
     await this.bindAutomationInsert(row).run();
   }
 
+  bindTargetInsert(row: AutomationTargetRow): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO automation_targets
+         (automation_id, repo_owner, repo_name, repo_id, base_branch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        row.automation_id,
+        row.repo_owner,
+        row.repo_name,
+        row.repo_id,
+        row.base_branch,
+        row.created_at,
+        row.updated_at
+      );
+  }
+
+  async createWithTargets(row: AutomationRow, targets: AutomationTargetRow[]): Promise<void> {
+    await this.db.batch([
+      this.bindAutomationInsert(row),
+      ...targets.map((target) => this.bindTargetInsert(target)),
+    ]);
+  }
+
   async getById(id: string): Promise<AutomationRow | null> {
     return this.db
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
@@ -205,26 +341,97 @@ export class AutomationStore {
       .first<AutomationRow>();
   }
 
+  async getTargetsForAutomation(automationId: string): Promise<AutomationTargetRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automation_targets
+         WHERE automation_id = ?
+         ORDER BY repo_owner ASC, repo_name ASC`
+      )
+      .bind(automationId)
+      .all<AutomationTargetRow>();
+    return result.results || [];
+  }
+
+  async getTargetsForAutomationIds(
+    automationIds: string[]
+  ): Promise<Map<string, AutomationTargetRow[]>> {
+    const targetsByAutomation = new Map<string, AutomationTargetRow[]>();
+    if (automationIds.length === 0) return targetsByAutomation;
+
+    const batchSize = 100;
+    for (let start = 0; start < automationIds.length; start += batchSize) {
+      const chunk = automationIds.slice(start, start + batchSize);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT * FROM automation_targets
+           WHERE automation_id IN (${placeholders})
+           ORDER BY repo_owner ASC, repo_name ASC`
+        )
+        .bind(...chunk)
+        .all<AutomationTargetRow>();
+
+      for (const row of result.results || []) {
+        const rows = targetsByAutomation.get(row.automation_id) ?? [];
+        rows.push(row);
+        targetsByAutomation.set(row.automation_id, rows);
+      }
+    }
+    return targetsByAutomation;
+  }
+
   async list(
     options: { repoOwner?: string; repoName?: string } = {}
   ): Promise<{ automations: AutomationRow[]; total: number }> {
-    const conditions: string[] = ["deleted_at IS NULL"];
-    const params: unknown[] = [];
+    const repoOwner = options.repoOwner?.toLowerCase();
+    const repoName = options.repoName?.toLowerCase();
 
-    if (options.repoOwner) {
-      conditions.push("repo_owner = ?");
-      params.push(options.repoOwner.toLowerCase());
-    }
-    if (options.repoName) {
-      conditions.push("repo_name = ?");
-      params.push(options.repoName.toLowerCase());
+    if (!repoOwner && !repoName) {
+      const result = await this.db
+        .prepare("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at DESC")
+        .all<AutomationRow>();
+
+      const automations = result.results || [];
+      return { automations, total: automations.length };
     }
 
-    const where = `WHERE ${conditions.join(" AND ")}`;
+    const directConditions: string[] = ["deleted_at IS NULL"];
+    const directParams: unknown[] = [];
+    const targetConditions: string[] = ["a.deleted_at IS NULL"];
+    const targetParams: unknown[] = [];
+
+    if (repoOwner) {
+      directConditions.push("repo_owner = ?");
+      directParams.push(repoOwner);
+      targetConditions.push("t.repo_owner = ?");
+      targetParams.push(repoOwner);
+    }
+    if (repoName) {
+      directConditions.push("repo_name = ?");
+      directParams.push(repoName);
+      targetConditions.push("t.repo_name = ?");
+      targetParams.push(repoName);
+    }
 
     const result = await this.db
-      .prepare(`SELECT * FROM automations ${where} ORDER BY created_at DESC`)
-      .bind(...params)
+      .prepare(
+        `WITH matched_ids AS (
+           SELECT id
+           FROM automations
+           WHERE ${directConditions.join(" AND ")}
+           UNION
+           SELECT t.automation_id AS id
+           FROM automation_targets t
+           INNER JOIN automations a ON a.id = t.automation_id
+           WHERE ${targetConditions.join(" AND ")}
+         )
+         SELECT a.*
+         FROM automations a
+         INNER JOIN matched_ids m ON m.id = a.id
+         ORDER BY a.created_at DESC`
+      )
+      .bind(...directParams, ...targetParams)
       .all<AutomationRow>();
 
     const automations = result.results || [];
@@ -242,6 +449,10 @@ export class AutomationStore {
 
     const allowedFields: (keyof AutomationRow)[] = [
       "name",
+      "target_mode",
+      "repo_owner",
+      "repo_name",
+      "repo_id",
       "instructions",
       "schedule_cron",
       "schedule_tz",
@@ -279,6 +490,27 @@ export class AutomationStore {
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
+    return this.getById(id);
+  }
+
+  bindTargetDelete(automationId: string): D1PreparedStatement {
+    return this.db
+      .prepare("DELETE FROM automation_targets WHERE automation_id = ?")
+      .bind(automationId);
+  }
+
+  async updateWithTargets(
+    id: string,
+    fields: Partial<AutomationRow>,
+    targets: AutomationTargetRow[]
+  ): Promise<AutomationRow | null> {
+    const updateStatement = this.bindAutomationUpdate(id, fields);
+    const statements = [
+      ...(updateStatement ? [updateStatement] : []),
+      this.bindTargetDelete(id),
+      ...targets.map((target) => this.bindTargetInsert(target)),
+    ];
+    await this.db.batch(statements);
     return this.getById(id);
   }
 
@@ -351,8 +583,9 @@ export class AutomationStore {
         `INSERT INTO automation_runs
          (id, automation_id, session_id, status, skip_reason, failure_reason,
           scheduled_at, started_at, completed_at, created_at, trigger_key, concurrency_key,
-          trigger_run_metadata)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          trigger_run_metadata, group_id, target_repo_owner, target_repo_name, target_repo_id,
+          target_base_branch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         run.id,
@@ -367,7 +600,12 @@ export class AutomationStore {
         run.created_at,
         run.trigger_key ?? null,
         run.concurrency_key ?? null,
-        run.trigger_run_metadata ?? null
+        run.trigger_run_metadata ?? null,
+        run.group_id ?? null,
+        run.target_repo_owner ?? null,
+        run.target_repo_name ?? null,
+        run.target_repo_id ?? null,
+        run.target_base_branch ?? null
       );
   }
 
@@ -383,6 +621,63 @@ export class AutomationStore {
     await this.db.batch([this.bindRunInsert(run), advanceSchedule]);
   }
 
+  private bindRunGroupInsert(group: AutomationRunGroupRow): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO automation_run_groups
+         (id, automation_id, status, skip_reason, failure_reason, scheduled_at, started_at,
+          completed_at, created_at, updated_at, failure_counted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        group.id,
+        group.automation_id,
+        group.status,
+        group.skip_reason,
+        group.failure_reason,
+        group.scheduled_at,
+        group.started_at,
+        group.completed_at,
+        group.created_at,
+        group.updated_at,
+        group.failure_counted_at
+      );
+  }
+
+  async createRunGroupAndAdvanceSchedule(
+    group: AutomationRunGroupRow,
+    automationId: string,
+    nextRunAt: number
+  ): Promise<void> {
+    const advanceSchedule = this.db
+      .prepare("UPDATE automations SET next_run_at = ?, updated_at = ? WHERE id = ?")
+      .bind(nextRunAt, Date.now(), automationId);
+
+    await this.db.batch([this.bindRunGroupInsert(group), advanceSchedule]);
+  }
+
+  async failRunGroup(groupId: string, reason: string, completedAt: number): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automation_run_groups
+         SET status = 'failed',
+             failure_reason = ?,
+             completed_at = ?,
+             updated_at = ?
+         WHERE id = ?
+           AND (
+             status IN ('starting', 'running')
+             OR (status = 'partial_failed' AND completed_at IS NULL)
+           )`
+      )
+      .bind(reason, completedAt, completedAt, groupId)
+      .run();
+  }
+
+  async insertRunGroup(group: AutomationRunGroupRow): Promise<void> {
+    await this.bindRunGroupInsert(group).run();
+  }
+
   async insertRun(run: AutomationRunRow): Promise<void> {
     await this.bindRunInsert(run).run();
   }
@@ -395,6 +690,7 @@ export class AutomationStore {
       "session_id",
       "status",
       "failure_reason",
+      "skip_reason",
       "started_at",
       "completed_at",
     ];
@@ -414,6 +710,66 @@ export class AutomationStore {
       .prepare(`UPDATE automation_runs SET ${setClauses.join(", ")} WHERE id = ?`)
       .bind(...params)
       .run();
+  }
+
+  async updateRunGroup(id: string, fields: Partial<AutomationRunGroupRow>): Promise<void> {
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+
+    const allowedFields: (keyof AutomationRunGroupRow)[] = [
+      "status",
+      "skip_reason",
+      "failure_reason",
+      "started_at",
+      "completed_at",
+      "failure_counted_at",
+    ];
+
+    for (const field of allowedFields) {
+      if (field in fields) {
+        setClauses.push(`${field} = ?`);
+        params.push(fields[field] as unknown);
+      }
+    }
+
+    if (setClauses.length === 0) return;
+
+    setClauses.push("updated_at = ?");
+    params.push(Date.now(), id);
+
+    await this.db
+      .prepare(`UPDATE automation_run_groups SET ${setClauses.join(", ")} WHERE id = ?`)
+      .bind(...params)
+      .run();
+  }
+
+  async getActiveRunGroupForAutomation(
+    automationId: string
+  ): Promise<AutomationRunGroupRow | null> {
+    return this.db
+      .prepare(
+        `SELECT * FROM automation_run_groups
+         WHERE automation_id = ?
+           AND (
+             status IN ('starting', 'running')
+             OR (status = 'partial_failed' AND completed_at IS NULL)
+           )
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(automationId)
+      .first<AutomationRunGroupRow>();
+  }
+
+  async tryMarkRunGroupFailureCounted(groupId: string, countedAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_run_groups
+         SET failure_counted_at = ?, updated_at = ?
+         WHERE id = ? AND failure_counted_at IS NULL`
+      )
+      .bind(countedAt, countedAt, groupId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async bulkFailRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
@@ -475,12 +831,30 @@ export class AutomationStore {
       .first<AutomationRunRow>();
   }
 
+  async hasRunHistory(automationId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `SELECT EXISTS (
+           SELECT 1 FROM automation_runs WHERE automation_id = ?
+           UNION ALL
+           SELECT 1 FROM automation_run_groups WHERE automation_id = ?
+         ) as has_history`
+      )
+      .bind(automationId, automationId)
+      .first<{ has_history: number }>();
+
+    return (result?.has_history ?? 0) === 1;
+  }
+
   async listRunsForAutomation(
     automationId: string,
     options: { limit: number; offset: number }
   ): Promise<{ runs: EnrichedRunRow[]; total: number }> {
     const countResult = await this.db
-      .prepare("SELECT COUNT(*) as count FROM automation_runs WHERE automation_id = ?")
+      .prepare(
+        `SELECT COUNT(*) as count FROM automation_runs
+         WHERE automation_id = ? AND group_id IS NULL`
+      )
       .bind(automationId)
       .first<{ count: number }>();
 
@@ -494,7 +868,7 @@ export class AutomationStore {
            NULL as artifact_summary
          FROM automation_runs r
          LEFT JOIN sessions s ON r.session_id = s.id
-         WHERE r.automation_id = ?
+         WHERE r.automation_id = ? AND r.group_id IS NULL
          ORDER BY r.created_at DESC
          LIMIT ? OFFSET ?`
       )
@@ -517,6 +891,115 @@ export class AutomationStore {
       )
       .bind(runId, automationId)
       .first<EnrichedRunRow>();
+  }
+
+  async listRunGroupsForAutomation(
+    automationId: string,
+    options: { limit: number; offset: number }
+  ): Promise<{ groups: EnrichedRunGroupRow[]; total: number }> {
+    const countResult = await this.db
+      .prepare("SELECT COUNT(*) as count FROM automation_run_groups WHERE automation_id = ?")
+      .bind(automationId)
+      .first<{ count: number }>();
+    const total = countResult?.count ?? 0;
+
+    const result = await this.db
+      .prepare(
+        `WITH page AS (
+           SELECT *
+           FROM automation_run_groups
+           WHERE automation_id = ?
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?
+         )
+         SELECT
+           page.*,
+           COUNT(r.id) as total_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'starting' THEN 1 ELSE 0 END), 0) as starting_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END), 0) as running_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END), 0) as completed_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END), 0) as failed_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END), 0) as skipped_runs
+         FROM page
+         LEFT JOIN automation_runs r ON r.group_id = page.id
+         GROUP BY page.id
+         ORDER BY page.created_at DESC`
+      )
+      .bind(automationId, options.limit, options.offset)
+      .all<EnrichedRunGroupRow>();
+
+    const groups = result.results || [];
+    await this.attachRunsToGroups(groups);
+    return { groups, total };
+  }
+
+  async getRunGroupSummary(groupId: string): Promise<EnrichedRunGroupRow | null> {
+    return this.db
+      .prepare(
+        `SELECT
+           g.*,
+           COUNT(r.id) as total_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'starting' THEN 1 ELSE 0 END), 0) as starting_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'running' THEN 1 ELSE 0 END), 0) as running_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END), 0) as completed_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END), 0) as failed_runs,
+           COALESCE(SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END), 0) as skipped_runs
+         FROM automation_run_groups g
+         LEFT JOIN automation_runs r ON r.group_id = g.id
+         WHERE g.id = ?
+         GROUP BY g.id`
+      )
+      .bind(groupId)
+      .first<EnrichedRunGroupRow>();
+  }
+
+  async listRunsForGroup(groupId: string): Promise<EnrichedRunRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT
+           r.*,
+           s.title as session_title,
+           NULL as artifact_summary
+         FROM automation_runs r
+         LEFT JOIN sessions s ON r.session_id = s.id
+         WHERE r.group_id = ?
+         ORDER BY r.created_at ASC`
+      )
+      .bind(groupId)
+      .all<EnrichedRunRow>();
+    return result.results || [];
+  }
+
+  private async attachRunsToGroups(groups: EnrichedRunGroupRow[]): Promise<void> {
+    if (groups.length === 0) return;
+
+    const groupIds = groups.map((group) => group.id);
+    const placeholders = groupIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT
+           r.*,
+           s.title as session_title,
+           NULL as artifact_summary
+         FROM automation_runs r
+         LEFT JOIN sessions s ON r.session_id = s.id
+         WHERE r.group_id IN (${placeholders})
+         ORDER BY r.created_at ASC`
+      )
+      .bind(...groupIds)
+      .all<EnrichedRunRow>();
+
+    const runsByGroup = new Map<string, EnrichedRunRow[]>();
+    for (const run of result.results || []) {
+      if (!run.group_id) continue;
+      const runs = runsByGroup.get(run.group_id) ?? [];
+      runs.push(run);
+      runsByGroup.set(run.group_id, runs);
+    }
+
+    for (const group of groups) {
+      group.runs = runsByGroup.get(group.id) ?? [];
+    }
   }
 
   // --- Event matching queries ---
@@ -627,6 +1110,12 @@ export class AutomationStore {
     "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
   static readonly TIMED_OUT_RUNNING_RUNS_SQL =
     "SELECT * FROM automation_runs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?";
+  static readonly ORPHANED_ACTIVE_RUN_GROUPS_SQL = `SELECT * FROM automation_run_groups g
+     WHERE (g.status IN ('starting', 'running') OR (g.status = 'partial_failed' AND g.completed_at IS NULL))
+       AND g.created_at < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM automation_runs r WHERE r.group_id = g.id
+       )`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
@@ -646,6 +1135,20 @@ export class AutomationStore {
       .prepare(`${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL} ORDER BY started_at ASC LIMIT ?`)
       .bind(cutoff, limit)
       .all<AutomationRunRow>();
+    return result.results || [];
+  }
+
+  async getOrphanedActiveRunGroups(
+    thresholdMs: number,
+    limit: number
+  ): Promise<AutomationRunGroupRow[]> {
+    const cutoff = Date.now() - thresholdMs;
+    const result = await this.db
+      .prepare(
+        `${AutomationStore.ORPHANED_ACTIVE_RUN_GROUPS_SQL} ORDER BY g.created_at ASC LIMIT ?`
+      )
+      .bind(cutoff, limit)
+      .all<AutomationRunGroupRow>();
     return result.results || [];
   }
 
