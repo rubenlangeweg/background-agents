@@ -138,7 +138,7 @@ describe("applyMigrations", () => {
     ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
-      if (query.includes("ALTER TABLE")) {
+      if (query.includes("ALTER TABLE") && query.includes("ADD COLUMN")) {
         throw new Error("duplicate column name: session_name");
       }
       return originalExec(query, ...params);

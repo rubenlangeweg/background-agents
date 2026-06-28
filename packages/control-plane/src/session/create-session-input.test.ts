@@ -45,10 +45,30 @@ describe("parseCreateSessionInput", () => {
     });
   });
 
-  it("rejects a malformed partial session input", async () => {
+  it("keeps partial repository fields available for route-level validation", async () => {
     const result = await parseCreateSessionInput(jsonRequest({ repoOwner: "open-inspect" }));
 
-    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+    expect(result).toEqual({
+      ok: true,
+      input: {
+        repoOwner: "open-inspect",
+      },
+    });
+  });
+
+  it("keeps no-repository requests available for route-level validation", async () => {
+    const result = await parseCreateSessionInput(
+      jsonRequest({
+        title: "No repository automation run",
+      })
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      input: {
+        title: "No repository automation run",
+      },
+    });
   });
 
   it("rejects invalid JSON without throwing", async () => {

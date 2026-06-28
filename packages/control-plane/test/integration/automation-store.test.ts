@@ -605,7 +605,7 @@ describe("AutomationStore (D1 integration)", () => {
         repoName: "web-app",
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: null,
-        baseBranch: null,
+        baseBranch: "main",
         status: "completed",
         createdAt: now,
         updatedAt: now,

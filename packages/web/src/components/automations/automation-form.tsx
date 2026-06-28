@@ -161,11 +161,17 @@ export function AutomationForm({
         ? "fixed_single_repo"
         : "fixed_multi_repo";
   const usesSingleRepository = targetMode === "fixed_single_repo";
+  const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
+  const selectedRepoDetails = usesSingleRepository
+    ? repos.find((repo) => repo.fullName === selectedRepo)
+    : undefined;
+  const resolvedSingleRepoBaseBranch = usesSingleRepository
+    ? baseBranch || selectedRepoDetails?.defaultBranch || ""
+    : "";
   const { branches, loading: loadingBranches } = useBranches(
     usesSingleRepository ? repoOwner : "",
     usesSingleRepository ? repoName : ""
   );
-  const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const [model, setModel] = useState(initialValues?.model ?? DEFAULT_MODEL);
   const [reasoningEffort, setReasoningEffort] = useState(initialValues?.reasoningEffort ?? "");
   const [scheduleCron, setScheduleCron] = useState(initialValues?.scheduleCron ?? "0 9 * * *");
@@ -245,6 +251,12 @@ export function AutomationForm({
     }
   }, [repoTargetRequired, repos, selectedRepos.length]);
 
+  useEffect(() => {
+    if (usesSingleRepository && !baseBranch && selectedRepoDetails) {
+      setBaseBranch(selectedRepoDetails.defaultBranch);
+    }
+  }, [baseBranch, selectedRepoDetails, usesSingleRepository]);
+
   const applySelectedRepos = useCallback(
     (nextRepos: string[]) => {
       setSelectedRepos(nextRepos);
@@ -323,7 +335,8 @@ export function AutomationForm({
       (repoSelectionRequired && selectedRepos.length === 0) ||
       selectedRepos.length > MAX_MULTI_REPO_TARGETS ||
       !instructions.trim() ||
-      !isScheduleValid
+      !isScheduleValid ||
+      (usesSingleRepository && !resolvedSingleRepoBaseBranch.trim())
     ) {
       return;
     }
@@ -350,7 +363,7 @@ export function AutomationForm({
     if (targetMode === "fixed_single_repo") {
       values.repoOwner = repoOwner;
       values.repoName = repoName;
-      values.baseBranch = baseBranch;
+      values.baseBranch = resolvedSingleRepoBaseBranch;
     } else if (targetMode === "fixed_multi_repo") {
       values.targets = selectedRepos.map((repoFullName) => {
         const [targetRepoOwner, targetRepoName] = repoFullName.split("/");
@@ -863,6 +876,7 @@ export function AutomationForm({
             selectedRepos.length > MAX_MULTI_REPO_TARGETS ||
             !instructions.trim() ||
             !isScheduleValid ||
+            (usesSingleRepository && !resolvedSingleRepoBaseBranch.trim()) ||
             !slackConditionsValid ||
             (showEventTypeSelector && !eventType) ||
             (triggerType === "sentry" && mode === "create" && !sentryClientSecret.trim())

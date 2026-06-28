@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared";
@@ -238,6 +238,59 @@ describe("automation cron submission", () => {
       repoName: "control-plane",
     });
     expect(onSubmit.mock.calls[0][0].targets).toBeUndefined();
+  });
+
+  it("backfills a single-repo base branch when repository data arrives later", async () => {
+    reposValue = [];
+    const onSubmit = vi.fn();
+    const initialValues: Partial<AutomationFormValues> = {
+      name: "Weekly review",
+      model: "openai/gpt-5.4",
+      repoOwner: "open-inspect",
+      repoName: "control-plane",
+      baseBranch: "",
+      scheduleCron: "0 9 * * 1",
+      scheduleTz: "UTC",
+      instructions: "Review the repo.",
+    };
+
+    const props = {
+      mode: "create" as const,
+      submitting: false,
+      onSubmit,
+      initialValues,
+    };
+    const { container, rerender } = render(<AutomationForm {...props} />);
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    reposValue = [
+      {
+        id: 2,
+        fullName: "open-inspect/control-plane",
+        owner: "open-inspect",
+        name: "control-plane",
+        description: null,
+        private: false,
+        defaultBranch: "develop",
+      },
+    ];
+
+    rerender(<AutomationForm {...props} />);
+    await waitFor(() => {
+      expect(screen.getByText("develop")).toBeInTheDocument();
+    });
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      targetMode: "fixed_single_repo",
+      repoOwner: "open-inspect",
+      repoName: "control-plane",
+      baseBranch: "develop",
+    });
   });
 
   it("submits multiple repositories after enabling multi-select", () => {

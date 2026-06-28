@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { automationRoutes } from "./automations";
-import type { RequestContext } from "./shared";
+import { resolveRepoOrError, type RequestContext } from "./shared";
 import type { Env } from "../types";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -230,6 +230,24 @@ describe("automation route handlers", () => {
             repo_name: "web-app",
           }),
         ])
+      );
+    });
+
+    it("trims single-repo identifiers before resolving on create", async () => {
+      mockStore.createWithTargets.mockResolvedValue(undefined);
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, repoOwner: " ACME ", repoName: " web-app " },
+      });
+
+      expect(res.status).toBe(201);
+      expect(vi.mocked(resolveRepoOrError)).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "web-app",
+        expect.anything(),
+        expect.anything()
       );
     });
 
@@ -580,6 +598,24 @@ describe("automation route handlers", () => {
       expect(mockStore.update).toHaveBeenCalledWith(
         "auto-1",
         expect.objectContaining({ name: "Updated" })
+      );
+    });
+
+    it("trims single-repo identifiers before resolving on update", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.updateWithTargets.mockResolvedValue({ ...sampleRow, name: "Daily sync" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { repoOwner: " ACME ", repoName: " web-app " },
+      });
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(resolveRepoOrError)).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "web-app",
+        expect.anything(),
+        expect.anything()
       );
     });
 

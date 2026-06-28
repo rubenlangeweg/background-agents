@@ -283,7 +283,7 @@ async function handleCreateAutomation(
   if (targetMode === "fixed_multi_repo" && triggerType !== "schedule") {
     return error("fixed_multi_repo automations are only supported for schedule triggers", 400);
   }
-  if (targetMode === "fixed_single_repo" && (!body.repoOwner || !body.repoName)) {
+  if (targetMode === "fixed_single_repo" && (!body.repoOwner?.trim() || !body.repoName?.trim())) {
     return error("repoOwner and repoName are required", 400);
   }
   const targetInputs =
@@ -361,8 +361,10 @@ async function handleCreateAutomation(
   let targetRows: AutomationTargetRow[] = [];
 
   if (targetMode === "fixed_single_repo") {
-    repoOwner = body.repoOwner!.toLowerCase();
-    repoName = body.repoName!.toLowerCase();
+    ({ repoOwner, repoName } = normalizeTargetInput({
+      repoOwner: body.repoOwner!,
+      repoName: body.repoName!,
+    }));
 
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
@@ -646,8 +648,12 @@ async function handleUpdateAutomation(
         base_branch: null,
       };
     } else if (nextTargetMode === "fixed_single_repo") {
-      const repoOwner = (body.repoOwner ?? existing.repo_owner ?? "").toLowerCase();
-      const repoName = (body.repoName ?? existing.repo_name ?? "").toLowerCase();
+      const normalizedTarget = normalizeTargetInput({
+        repoOwner: body.repoOwner ?? existing.repo_owner ?? "",
+        repoName: body.repoName ?? existing.repo_name ?? "",
+      });
+      const repoOwner = normalizedTarget.repoOwner;
+      const repoName = normalizedTarget.repoName;
       if (!repoOwner || !repoName) {
         return error("repoOwner and repoName are required", 400);
       }

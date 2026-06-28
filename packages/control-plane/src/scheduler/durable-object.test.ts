@@ -918,6 +918,47 @@ describe("SchedulerDO", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("fails active child runs before recovering an orphaned active run group", async () => {
+      const orphanedGroup = {
+        id: "group-1",
+        automation_id: "auto-1",
+        status: "starting",
+        skip_reason: null,
+        failure_reason: null,
+        scheduled_at: now - 10 * 60 * 1000,
+        started_at: now - 10 * 60 * 1000,
+        completed_at: null,
+        created_at: now - 10 * 60 * 1000,
+        updated_at: now - 10 * 60 * 1000,
+        failure_counted_at: null,
+        expected_runs: 2,
+      };
+      mockStore.getOrphanedActiveRunGroups.mockResolvedValue([orphanedGroup]);
+      mockStore.listRunsForGroup.mockResolvedValue([
+        { id: "child-starting", status: "starting" },
+        { id: "child-running", status: "running" },
+        { id: "child-completed", status: "completed" },
+      ]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.listRunsForGroup).toHaveBeenCalledWith("group-1");
+      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+        ["child-starting", "child-running"],
+        "group_start_timeout",
+        expect.any(Number)
+      );
+      expect(mockStore.bulkFailRuns.mock.invocationCallOrder[0]).toBeLessThan(
+        mockStore.failRunGroup.mock.invocationCallOrder[0]
+      );
+      expect(mockStore.failRunGroup).toHaveBeenCalledWith(
+        "group-1",
+        "group_start_timeout",
+        expect.any(Number)
+      );
+    });
+
     it("recovers one category when the other recovery query fails", async () => {
       const timedOutRun = {
         id: "timeout-1",

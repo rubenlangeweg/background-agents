@@ -709,6 +709,12 @@ export class SchedulerDO extends DurableObject<Env> {
 
     for (const group of orphanedGroups) {
       try {
+        const activeChildRunIds = (await store.listRunsForGroup(group.id))
+          .filter((run) => run.status === "starting" || run.status === "running")
+          .map((run) => run.id);
+        if (activeChildRunIds.length > 0) {
+          await store.bulkFailRuns(activeChildRunIds, "group_start_timeout", now);
+        }
         await store.failRunGroup(group.id, "group_start_timeout", now);
         await this.trackRunGroupTerminalStatus(store, group.automation_id, group.id, "failed");
       } catch (e) {

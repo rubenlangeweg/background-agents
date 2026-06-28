@@ -27,12 +27,6 @@ export async function parseCreateSessionInput(
     return { ok: false, message: "JSON body must be an object" };
   }
 
-  const repoOwnerMissing = parsed.repoOwner == null || parsed.repoOwner === "";
-  const repoNameMissing = parsed.repoName == null || parsed.repoName === "";
-  if (repoOwnerMissing && repoNameMissing) {
-    return { ok: false, message: NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR };
-  }
-
   const result = createSessionInputSchema.safeParse(parsed);
   if (!result.success) {
     return { ok: false, message: "Invalid session request body" };

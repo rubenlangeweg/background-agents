@@ -145,4 +145,73 @@ describe("AutomationDetailPage run history pagination", () => {
     expect(await screen.findByText("Second page group")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load more (2 of 3)" })).toBeInTheDocument();
   });
+
+  it("ignores stale load-more responses after the automation id changes", async () => {
+    mockUseSidebarContext.mockReturnValue({ isOpen: true, toggle: vi.fn() });
+    mockUseAutomation.mockImplementation((id: string) => ({
+      automation: { ...createAutomation(), id },
+      loading: false,
+      mutate: vi.fn(),
+    }));
+    mockUseAutomationRuns.mockImplementation((id: string) => ({
+      runs: [],
+      groups:
+        id === "auto-1"
+          ? [createGroup("group-1", "First automation group")]
+          : [createGroup("group-2", "Current automation group")],
+      total: id === "auto-1" ? 2 : 1,
+      loading: false,
+      mutate: vi.fn(),
+    }));
+
+    let resolveFetch!: (response: Response) => void;
+    const pendingFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pendingFetch);
+    vi.stubGlobal("fetch", fetchMock);
+
+    let rerender!: ReturnType<typeof render>["rerender"];
+    await act(async () => {
+      ({ rerender } = render(
+        <Suspense fallback={null}>
+          <AutomationDetailPage params={Promise.resolve({ id: "auto-1" })} />
+        </Suspense>
+      ));
+    });
+
+    expect(await screen.findByText("First automation group")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Load more (1 of 2)" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/automations/auto-1/runs?limit=20&offset=1");
+    });
+
+    await act(async () => {
+      rerender(
+        <Suspense fallback={null}>
+          <AutomationDetailPage params={Promise.resolve({ id: "auto-2" })} />
+        </Suspense>
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText("Current automation group")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFetch(
+        Response.json({
+          runs: [],
+          groups: [createGroup("stale-group", "Stale automation group")],
+          total: 3,
+        })
+      );
+      await pendingFetch;
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Stale automation group")).not.toBeInTheDocument();
+    });
+  });
 });

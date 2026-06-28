@@ -112,7 +112,7 @@ export function assertConditionMatch(
 export function makeTriggerAutomation(
   overrides?: Partial<RepositoryAutomation>
 ): RepositoryAutomation {
-  return {
+  const automation: RepositoryAutomation = {
     id: "auto-test",
     name: "Test Automation",
     targetMode: "fixed_single_repo",
@@ -120,14 +120,7 @@ export function makeTriggerAutomation(
     repoName: "test-repo",
     baseBranch: "main",
     repoId: 1,
-    targets: [
-      {
-        repoOwner: "test-owner",
-        repoName: "test-repo",
-        repoId: 1,
-        baseBranch: "main",
-      },
-    ],
+    targets: [],
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,
@@ -145,4 +138,15 @@ export function makeTriggerAutomation(
     triggerConfig: { conditions: [] },
     ...overrides,
   };
+
+  automation.targets = [
+    {
+      repoOwner: automation.repoOwner,
+      repoName: automation.repoName,
+      repoId: automation.repoId,
+      baseBranch: automation.baseBranch,
+    },
+  ];
+
+  return automation;
 }

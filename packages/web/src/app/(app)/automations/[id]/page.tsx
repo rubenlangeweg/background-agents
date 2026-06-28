@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useRef, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -53,6 +53,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const [extraGroups, setExtraGroups] = useState<AutomationRunGroup[]>([]);
   const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
   const [effectiveTotalRuns, setEffectiveTotalRuns] = useState(totalRuns);
+  const runsRequestVersionRef = useRef(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const visibleRuns = [...runs, ...extraRuns];
@@ -65,8 +66,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     : null;
 
   useEffect(() => {
+    runsRequestVersionRef.current += 1;
     setExtraRuns([]);
     setExtraGroups([]);
+    setLoadingMoreRuns(false);
   }, [id]);
 
   useEffect(() => {
@@ -74,13 +77,17 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   }, [totalRuns]);
 
   const refreshRuns = () => {
+    runsRequestVersionRef.current += 1;
     setExtraRuns([]);
     setExtraGroups([]);
+    setLoadingMoreRuns(false);
     mutateRuns();
   };
 
   const handleLoadMoreRuns = async () => {
     if (!id || loadingMoreRuns) return;
+    const requestVersion = ++runsRequestVersionRef.current;
+    const requestId = id;
     setLoadingMoreRuns(true);
     setActionError(null);
 
@@ -90,13 +97,15 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     });
 
     try {
-      const res = await fetch(`/api/automations/${id}/runs?${params.toString()}`);
+      const res = await fetch(`/api/automations/${requestId}/runs?${params.toString()}`);
+      if (runsRequestVersionRef.current !== requestVersion) return;
       if (!res.ok) {
         setActionError("Failed to load more runs");
         return;
       }
 
       const data = (await res.json()) as ListAutomationRunsResponse;
+      if (runsRequestVersionRef.current !== requestVersion) return;
       const nextRuns = data.runs ?? [];
       const nextGroups = data.groups ?? [];
       setEffectiveTotalRuns(data.total);
@@ -110,10 +119,13 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
         return [...prev, ...nextGroups.filter((group) => !seen.has(group.id))];
       });
     } catch (error) {
+      if (runsRequestVersionRef.current !== requestVersion) return;
       console.error("Failed to load more automation runs:", error);
       setActionError("Failed to load more runs");
     } finally {
-      setLoadingMoreRuns(false);
+      if (runsRequestVersionRef.current === requestVersion) {
+        setLoadingMoreRuns(false);
+      }
     }
   };
 

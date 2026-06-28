@@ -562,8 +562,8 @@ export type CallbackContext =
 
 // API response types
 export const createSessionRequestSchema = z.object({
-  repoOwner: z.string(),
-  repoName: z.string(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
   title: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),

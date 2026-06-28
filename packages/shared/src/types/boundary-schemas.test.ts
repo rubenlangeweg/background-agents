@@ -21,9 +21,17 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("rejects a malformed session creation request", () => {
+    it("parses a repo-less session creation request for route-level validation", () => {
       const result = createSessionRequestSchema.safeParse({
-        repoOwner: "open-inspect",
+        title: "Investigate issue",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects malformed session creation field types", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: 123,
       });
 
       expect(result.success).toBe(false);
