@@ -45,7 +45,7 @@ import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
 import { cn } from "@/lib/utils";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { formatRepoLabel, NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -399,7 +399,7 @@ export function AutomationForm({
     multipleSelectionEnabled && selectedRepos.length > 0
       ? `${selectedRepos.length} ${selectedRepos.length === 1 ? "repository" : "repositories"}`
       : selectedRepos.length === 0
-        ? "No repository"
+        ? NO_REPOSITORY_LABEL
         : formatRepoLabel(repoOwner, repoName);
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
@@ -520,7 +520,7 @@ export function AutomationForm({
                     className="h-4 w-4 rounded border-border accent-accent"
                   />
                   <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>No repository</span>
+                  <span>{NO_REPOSITORY_LABEL}</span>
                 </label>
               ) : (
                 <button
@@ -534,7 +534,7 @@ export function AutomationForm({
                   )}
                 >
                   <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">No repository</span>
+                  <span className="min-w-0 flex-1 truncate">{NO_REPOSITORY_LABEL}</span>
                   {selectedRepos.length === 0 && <CheckIcon className="h-4 w-4 text-accent" />}
                 </button>
               )}
