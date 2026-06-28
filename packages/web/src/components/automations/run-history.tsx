@@ -127,21 +127,29 @@ export function RunHistory({
                         ? `${run.targetRepoOwner}/${run.targetRepoName}`
                         : run.sessionTitle;
                     return (
-                      <div key={run.id} className="flex items-center justify-between gap-3 text-sm">
-                        <div className="flex min-w-0 items-center gap-2">
-                          {statusBadge(run.status)}
-                          <span className="truncate text-foreground">{target}</span>
-                          {childDuration && (
-                            <span className="text-xs text-muted-foreground">{childDuration}</span>
+                      <div key={run.id} className="space-y-1">
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {statusBadge(run.status)}
+                            <span className="truncate text-foreground">{target}</span>
+                            {childDuration && (
+                              <span className="text-xs text-muted-foreground">{childDuration}</span>
+                            )}
+                          </div>
+                          {run.sessionId && (
+                            <Link
+                              href={`/session/${run.sessionId}`}
+                              className="flex-shrink-0 text-xs text-accent hover:underline"
+                            >
+                              View session
+                            </Link>
                           )}
                         </div>
-                        {run.sessionId && (
-                          <Link
-                            href={`/session/${run.sessionId}`}
-                            className="flex-shrink-0 text-xs text-accent hover:underline"
-                          >
-                            View session
-                          </Link>
+                        {run.failureReason && (
+                          <p className="text-xs text-destructive">{run.failureReason}</p>
+                        )}
+                        {!run.failureReason && run.skipReason && (
+                          <p className="text-xs text-warning">{run.skipReason}</p>
                         )}
                       </div>
                     );

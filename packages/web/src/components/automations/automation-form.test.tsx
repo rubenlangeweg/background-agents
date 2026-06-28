@@ -276,6 +276,39 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0].repoName).toBeUndefined();
   });
 
+  it("clears repository search when the picker closes", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Weekly review",
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * 1",
+          scheduleTz: "UTC",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+    fireEvent.change(screen.getByPlaceholderText("Search repositories"), {
+      target: { value: "control" },
+    });
+    expect(
+      screen.queryByRole("button", { name: "open-inspect/background-agents" })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "open-inspect/control-plane" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+
+    expect(screen.getByPlaceholderText("Search repositories")).toHaveValue("");
+    expect(
+      screen.getByRole("button", { name: "open-inspect/background-agents" })
+    ).toBeInTheDocument();
+  });
+
   it("selects a repository for GitHub event automations", () => {
     render(
       <AutomationForm

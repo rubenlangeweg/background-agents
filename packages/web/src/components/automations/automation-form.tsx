@@ -307,6 +307,12 @@ export function AutomationForm({
     setRepoSelectionMode("multiple");
   }, [applySelectedRepos, multiRepoAllowed, repoSelectionMode, selectedRepos]);
 
+  useEffect(() => {
+    if (!repoDropdownOpen) {
+      setRepoQuery("");
+    }
+  }, [repoDropdownOpen]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Block until enabled models load: resolvedModel can't coerce against an
