@@ -752,14 +752,9 @@ export type AutomationTargetMode = "fixed_single_repo" | "no_repository";
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
-export interface Automation {
+export interface AutomationBase {
   id: string;
   name: string;
-  targetMode: AutomationTargetMode;
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-  repoId: number | null;
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;
@@ -777,12 +772,24 @@ export interface Automation {
   triggerConfig: TriggerConfig | null;
 }
 
-export interface CreateAutomationRequest {
+export type Automation =
+  | (AutomationBase & {
+      targetMode: "fixed_single_repo";
+      repoOwner: string;
+      repoName: string;
+      baseBranch: string | null;
+      repoId: number | null;
+    })
+  | (AutomationBase & {
+      targetMode: "no_repository";
+      repoOwner: null;
+      repoName: null;
+      baseBranch: null;
+      repoId: null;
+    });
+
+export interface CreateAutomationRequestBase {
   name: string;
-  targetMode?: AutomationTargetMode;
-  repoOwner?: string;
-  repoName?: string;
-  baseBranch?: string;
   instructions: string;
   triggerType?: AutomationTriggerType;
   scheduleCron?: string;
@@ -793,6 +800,20 @@ export interface CreateAutomationRequest {
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
 }
+
+export type CreateAutomationRequest =
+  | (CreateAutomationRequestBase & {
+      targetMode?: "fixed_single_repo";
+      repoOwner: string;
+      repoName: string;
+      baseBranch?: string;
+    })
+  | (CreateAutomationRequestBase & {
+      targetMode: "no_repository";
+      repoOwner?: null;
+      repoName?: null;
+      baseBranch?: null;
+    });
 
 export interface UpdateAutomationRequest {
   name?: string;
