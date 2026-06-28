@@ -16,7 +16,7 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared";
 import type { SandboxStatus } from "../../types";
-import type { SandboxRow, SessionRow } from "../../session/types";
+import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import { SandboxProviderError, type SandboxProvider, type CreateSandboxConfig } from "../provider";
 import {
   evaluateCircuitBreaker,
@@ -186,12 +186,6 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
 
 /** Child (agent-spawned) sessions get a shorter sandbox timeout. */
 const CHILD_SANDBOX_TIMEOUT_SECONDS = 3600; // 1 hour (vs default 2 hours)
-
-function sessionHasRepository(
-  session: SessionRow
-): session is SessionRow & { repo_owner: string; repo_name: string } {
-  return Boolean(session.repo_owner && session.repo_name);
-}
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -537,7 +531,7 @@ export class SandboxLifecycleManager {
 
   private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
     if (!this.config.slackAgentNotifyLookup) return false;
-    if (!session.repo_owner || !session.repo_name) return false;
+    if (!sessionHasRepository(session)) return false;
     try {
       return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
         session.repo_owner,

@@ -7,6 +7,7 @@ import { formatSessionCost } from "@/lib/session-cost";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
+import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact } from "@/types/session";
 import {
   ClockIcon,
@@ -198,7 +199,7 @@ export function MetadataSection({
               {repoOwner}/{repoName}
             </a>
           ) : (
-            <span className="text-muted-foreground">No repository</span>
+            <span className="text-muted-foreground">{NO_REPOSITORY_LABEL}</span>
           )}
         </div>
       )}

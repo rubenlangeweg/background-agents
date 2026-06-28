@@ -43,6 +43,15 @@ export interface SessionRow {
   updated_at: number;
 }
 
+export type RepositorySessionRow = SessionRow & {
+  repo_owner: string;
+  repo_name: string;
+};
+
+export function sessionHasRepository(session: SessionRow): session is RepositorySessionRow {
+  return Boolean(session.repo_owner && session.repo_name);
+}
+
 export interface ParticipantRow {
   id: string;
   user_id: string;

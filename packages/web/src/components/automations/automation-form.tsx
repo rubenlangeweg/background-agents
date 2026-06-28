@@ -36,7 +36,7 @@ import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
 import { cn } from "@/lib/utils";
-import { formatRepoLabel } from "@/lib/repo-label";
+import { formatRepoLabel, NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -285,7 +285,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const displayRepoName = selectedRepoObj
     ? selectedRepoObj.name
     : selectedRepo || "Select repository";
-  const targetLabel = usesRepository ? formatRepoLabel(repoOwner, repoName) : "No repository";
+  const targetLabel = usesRepository ? formatRepoLabel(repoOwner, repoName) : NO_REPOSITORY_LABEL;
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
@@ -355,7 +355,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               checked={targetMode === "no_repository"}
               onChange={() => handleTargetModeChange("no_repository")}
               disabled={repoTargetRequired}
-              label="No repository"
+              label={NO_REPOSITORY_LABEL}
               description={
                 repoTargetRequired
                   ? "Repository-scoped triggers need a repository."
@@ -365,7 +365,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </div>
         ) : (
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
-            {targetMode === "no_repository" ? "No repository" : targetLabel}
+            {targetMode === "no_repository" ? NO_REPOSITORY_LABEL : targetLabel}
             <span className="text-xs ml-2">(cannot be changed)</span>
           </div>
         )}
