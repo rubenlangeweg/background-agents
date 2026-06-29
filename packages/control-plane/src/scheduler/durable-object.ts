@@ -51,7 +51,7 @@ import {
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
 import {
-  resolveAutomationTarget,
+  resolveAutomationSessionLaunches,
   resolveAutomationTargetRow,
 } from "../automation/target-resolution";
 
@@ -79,11 +79,8 @@ const RECOVERY_SWEEP_LIMIT = 50;
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function formatAutomationTargetLabel(
-  automation: Pick<AutomationRow, "target_mode" | "repo_owner" | "repo_name"> | null | undefined
+  automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined
 ): string {
-  if (automation?.target_mode === "no_repository") {
-    return "No repository";
-  }
   return automation?.repo_owner && automation?.repo_name
     ? `${automation.repo_owner}/${automation.repo_name}`
     : "No repository";
@@ -250,8 +247,14 @@ export class SchedulerDO extends DurableObject<Env> {
 
     for (const automation of overdue) {
       try {
-        if (automation.target_mode === "fixed_multi_repo") {
-          const result = await this.processScheduledMultiRepoAutomation(store, automation, now);
+        const targets = await store.getTargetsForAutomation(automation.id);
+        if (targets.length > 1) {
+          const result = await this.processScheduledMultiRepoAutomation(
+            store,
+            automation,
+            targets,
+            now
+          );
           processed += result.processed;
           skipped += result.skipped;
           failed += result.failed;
@@ -365,6 +368,7 @@ export class SchedulerDO extends DurableObject<Env> {
   private async processScheduledMultiRepoAutomation(
     store: AutomationStore,
     automation: AutomationRow,
+    targets: AutomationTargetRow[],
     now: number
   ): Promise<{ processed: number; skipped: number; failed: number }> {
     const nextRunAt = nextCronOccurrence(
@@ -415,7 +419,7 @@ export class SchedulerDO extends DurableObject<Env> {
     await store.createRunGroupAndAdvanceSchedule(group, automation.id, nextRunAt);
 
     try {
-      await this.startMultiRepoRunGroup(store, automation, group);
+      await this.startMultiRepoRunGroup(store, automation, group, targets);
       return { processed: 1, skipped: 0, failed: 0 };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -438,11 +442,11 @@ export class SchedulerDO extends DurableObject<Env> {
   private async startMultiRepoRunGroup(
     store: AutomationStore,
     automation: AutomationRow,
-    group: AutomationRunGroupRow
+    group: AutomationRunGroupRow,
+    targets: AutomationTargetRow[]
   ): Promise<void> {
-    const targets = await store.getTargetsForAutomation(automation.id);
     if (targets.length < 2 || targets.length > 10) {
-      throw new Error("fixed_multi_repo automation must have 2-10 targets");
+      throw new Error("Multi-repository automation must have 2-10 targets");
     }
 
     const childRuns = targets.map((target) => ({
@@ -966,8 +970,9 @@ export class SchedulerDO extends DurableObject<Env> {
       });
     }
 
-    if (automation.target_mode === "fixed_multi_repo") {
-      return this.handleMultiRepoTrigger(store, automation);
+    const targets = await store.getTargetsForAutomation(automationId);
+    if (targets.length > 1) {
+      return this.handleMultiRepoTrigger(store, automation, targets);
     }
 
     // Concurrency check
@@ -1043,7 +1048,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   private async handleMultiRepoTrigger(
     store: AutomationStore,
-    automation: AutomationRow
+    automation: AutomationRow,
+    targets: AutomationTargetRow[]
   ): Promise<Response> {
     const activeGroup = await store.getActiveRunGroupForAutomation(automation.id);
     if (activeGroup) {
@@ -1073,7 +1079,7 @@ export class SchedulerDO extends DurableObject<Env> {
     await store.insertRunGroup(group);
 
     try {
-      await this.startMultiRepoRunGroup(store, automation, group);
+      await this.startMultiRepoRunGroup(store, automation, group, targets);
       const summary = await store.getRunGroupSummary(groupId);
       const runs = await store.listRunsForGroup(groupId);
       if (summary) summary.runs = runs;
@@ -1363,7 +1369,8 @@ export class SchedulerDO extends DurableObject<Env> {
     }
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
-    const target = targetOverride ?? (await resolveAutomationTarget(this.env, automation));
+    const launch =
+      targetOverride ?? (await resolveAutomationSessionLaunches(this.env, automation))[0];
 
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
@@ -1385,7 +1392,7 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const { repoOwner, repoName, repoId, baseBranch } = target;
+    const { repoOwner, repoName, repoId, baseBranch } = launch;
 
     const [codeServerEnabled, sandboxSettings] = await Promise.all([
       resolveCodeServerEnabled(this.env.DB, repoOwner, repoName),

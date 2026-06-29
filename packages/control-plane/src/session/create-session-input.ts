@@ -2,9 +2,6 @@ import { createSessionInputSchema, type CreateSessionInput } from "@open-inspect
 
 export type { CreateSessionInput };
 
-export const NO_REPOSITORY_SESSIONS_AUTOMATION_ONLY_ERROR =
-  "No-repository sessions can only be created by automations";
-
 export type CreateSessionInputParseResult =
   | { ok: true; input: CreateSessionInput }
   | { ok: false; message: string };

@@ -58,9 +58,9 @@ For non-schedule automations, schedule fields are not used.
 
 ---
 
-## Automation Targets
+## Repository Context
 
-Automations currently support three target modes:
+Automations can run with zero, one, or multiple repository targets:
 
 - **Single repository**: clone one configured repository and branch for each run.
 - **Multiple repositories**: create one grouped scheduled run, then start a child run for each
@@ -71,9 +71,9 @@ Automations currently support three target modes:
   require a repository target.
 
 Target configuration can be edited while an automation is idle. Updates replace the stored target
-set used by future runs. Mode changes are rejected while a run or run group is active, and
-multi-repo mode remains schedule-only; event-driven automations can use a single repository or no
-repository depending on the trigger type.
+set used by future runs. Repository cardinality changes are rejected while a run or run group is
+active, and multi-repo automations remain schedule-only; event-driven automations can use a single
+repository or no repository depending on the trigger type.
 
 ---
 

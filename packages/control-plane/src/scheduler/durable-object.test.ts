@@ -279,7 +279,6 @@ const sampleSlackAutomation = {
 function multiRepoAutomation(overrides: Record<string, unknown> = {}) {
   return {
     ...sampleAutomation,
-    target_mode: "fixed_multi_repo",
     repo_owner: null,
     repo_name: null,
     repo_id: null,
@@ -424,7 +423,7 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("counts a scheduled fixed_multi_repo group as one processed automation", async () => {
+    it("counts a scheduled multi-repo group as one processed automation", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
       mockStore.getTargetsForAutomation.mockResolvedValue(
         multiRepoTargets("web-app", "api", "docs")
@@ -454,7 +453,7 @@ describe("SchedulerDO", () => {
       expect(mockStore.insertRun).not.toHaveBeenCalled();
     });
 
-    it("keeps scheduled fixed_multi_repo siblings running when one target becomes inaccessible", async () => {
+    it("keeps scheduled multi-repo siblings running when one target becomes inaccessible", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
       mockStore.getTargetsForAutomation.mockResolvedValue(
         multiRepoTargets("web-app", "api", "docs")
@@ -511,8 +510,9 @@ describe("SchedulerDO", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
-    it("does not count skipped fixed_multi_repo groups as failures", async () => {
+    it("does not count skipped multi-repo groups as failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([multiRepoAutomation()]);
+      mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
       mockStore.getActiveRunGroupForAutomation.mockResolvedValue({
         id: "active-group",
         automation_id: "auto-1",
@@ -545,7 +545,7 @@ describe("SchedulerDO", () => {
         "auto-1",
         expect.any(Number)
       );
-      expect(mockStore.getTargetsForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.getTargetsForAutomation).toHaveBeenCalledWith("auto-1");
       expect(mockStore.insertRun).not.toHaveBeenCalled();
       expect(mockStore.tryMarkRunGroupFailureCounted).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
@@ -615,10 +615,9 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("creates sessions with null repo fields for no_repository automations", async () => {
+    it("creates sessions with null repo fields for repo-less automations", async () => {
       const automation = {
         ...sampleAutomation,
-        target_mode: "no_repository",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -1353,9 +1352,8 @@ describe("SchedulerDO", () => {
       });
       mockStore.getById.mockResolvedValue({
         ...sampleSlackAutomation,
-        target_mode: "no_repository",
-        repo_owner: "stale-owner",
-        repo_name: "stale-repo",
+        repo_owner: null,
+        repo_name: null,
         repo_id: null,
         base_branch: null,
       });
@@ -1745,7 +1743,7 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("creates a grouped run and child sessions for fixed_multi_repo trigger", async () => {
+    it("creates a grouped run and child sessions for multi-repo trigger", async () => {
       mockStore.getById.mockResolvedValue(multiRepoAutomation());
       mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
       mockStore.getRunGroupSummary.mockResolvedValue(
@@ -1864,7 +1862,7 @@ describe("SchedulerDO", () => {
       );
     });
 
-    it("allows manual fixed_multi_repo trigger while automation is paused", async () => {
+    it("allows manual multi-repo trigger while automation is paused", async () => {
       mockStore.getById.mockResolvedValue(multiRepoAutomation({ enabled: 0, next_run_at: null }));
       mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
       mockStore.getRunGroupSummary.mockResolvedValue(
@@ -1899,7 +1897,7 @@ describe("SchedulerDO", () => {
       ).toHaveLength(2);
     });
 
-    it("counts manual fixed_multi_repo partial failures toward auto-pause", async () => {
+    it("counts manual multi-repo partial failures toward auto-pause", async () => {
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
       mockStore.getById.mockResolvedValue(multiRepoAutomation());
       mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
@@ -1953,8 +1951,9 @@ describe("SchedulerDO", () => {
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
 
-    it("returns 409 for fixed_multi_repo trigger when an active group exists", async () => {
+    it("returns 409 for multi-repo trigger when an active group exists", async () => {
       mockStore.getById.mockResolvedValue(multiRepoAutomation());
+      mockStore.getTargetsForAutomation.mockResolvedValue(multiRepoTargets("web-app", "api"));
       mockStore.getActiveRunGroupForAutomation.mockResolvedValue({
         id: "group-active",
         automation_id: "auto-1",
@@ -2104,13 +2103,12 @@ describe("SchedulerDO", () => {
       expect(mockStore.getActiveRunForKey).not.toHaveBeenCalled();
     });
 
-    it("uses a no-repository label when steering a no-repo automation thread", async () => {
+    it("uses a no-repository label when steering a repo-less automation thread", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([
         {
           ...sampleSlackAutomation,
-          target_mode: "no_repository",
-          repo_owner: "stale-owner",
-          repo_name: "stale-repo",
+          repo_owner: null,
+          repo_name: null,
           repo_id: null,
           base_branch: null,
         },

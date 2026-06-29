@@ -40,7 +40,7 @@ interface AuditFields {
   prompt_author_user_id: string | null;
   trigger_source: string | null;
   parent_session_id: string | null;
-  repo: string;
+  repo: string | null;
 }
 
 export async function handleSlackNotify(
@@ -66,7 +66,7 @@ export async function handleSlackNotify(
     prompt_author_user_id: session.userId ?? null,
     trigger_source: session.spawnSource ?? null,
     parent_session_id: session.parentSessionId ?? null,
-    repo: repoScope ?? "No repository",
+    repo: repoScope,
   };
 
   const token = env.SLACK_BOT_TOKEN;

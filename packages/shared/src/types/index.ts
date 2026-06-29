@@ -560,13 +560,16 @@ export type CallbackContext =
   | LinearCallbackContext
   | AutomationCallbackContext;
 
-// API response types
+function hasRepositoryIdentifier(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function validateSessionRepoPair(
-  value: { repoOwner?: string; repoName?: string },
+  value: { repoOwner?: string | null; repoName?: string | null },
   ctx: z.RefinementCtx
 ): void {
-  const repoOwnerMissing = value.repoOwner == null || value.repoOwner === "";
-  const repoNameMissing = value.repoName == null || value.repoName === "";
+  const repoOwnerMissing = !hasRepositoryIdentifier(value.repoOwner);
+  const repoNameMissing = !hasRepositoryIdentifier(value.repoName);
   if (repoOwnerMissing !== repoNameMissing) {
     ctx.addIssue({
       code: "custom",
@@ -577,8 +580,8 @@ function validateSessionRepoPair(
 }
 
 const createSessionRequestBaseSchema = z.object({
-  repoOwner: z.string().optional(),
-  repoName: z.string().optional(),
+  repoOwner: z.string().nullish(),
+  repoName: z.string().nullish(),
   title: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
@@ -774,8 +777,6 @@ export type AutomationRunGroupStatus =
   | "partial_failed"
   | "skipped";
 
-export type AutomationTargetMode = "fixed_single_repo" | "fixed_multi_repo" | "no_repository";
-
 export interface AutomationTarget {
   repoOwner: string;
   repoName: string;
@@ -810,30 +811,13 @@ export interface AutomationBase {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
+  repoId: number | null;
 }
 
-export type Automation =
-  | (AutomationBase & {
-      targetMode: "fixed_single_repo";
-      repoOwner: string;
-      repoName: string;
-      baseBranch: string | null;
-      repoId: number | null;
-    })
-  | (AutomationBase & {
-      targetMode: "fixed_multi_repo";
-      repoOwner: null;
-      repoName: null;
-      baseBranch: null;
-      repoId: null;
-    })
-  | (AutomationBase & {
-      targetMode: "no_repository";
-      repoOwner: null;
-      repoName: null;
-      baseBranch: null;
-      repoId: null;
-    });
+export type Automation = AutomationBase;
 
 export interface CreateAutomationRequestBase {
   name: string;
@@ -846,42 +830,24 @@ export interface CreateAutomationRequestBase {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  baseBranch?: string | null;
+  targets?: AutomationTargetInput[];
 }
 
-export type CreateAutomationRequest =
-  | (CreateAutomationRequestBase & {
-      targetMode?: "fixed_single_repo";
-      repoOwner: string;
-      repoName: string;
-      baseBranch?: string;
-      targets?: never;
-    })
-  | (CreateAutomationRequestBase & {
-      targetMode: "fixed_multi_repo";
-      targets: AutomationTargetInput[];
-      repoOwner?: null;
-      repoName?: null;
-      baseBranch?: null;
-    })
-  | (CreateAutomationRequestBase & {
-      targetMode: "no_repository";
-      repoOwner?: null;
-      repoName?: null;
-      baseBranch?: null;
-      targets?: never;
-    });
+export type CreateAutomationRequest = CreateAutomationRequestBase;
 
 export interface UpdateAutomationRequest {
   name?: string;
-  targetMode?: AutomationTargetMode;
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   instructions?: string;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
-  baseBranch?: string;
+  baseBranch?: string | null;
   targets?: AutomationTargetInput[];
   eventType?: string;
   triggerConfig?: TriggerConfig;

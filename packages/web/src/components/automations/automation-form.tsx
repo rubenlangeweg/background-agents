@@ -9,7 +9,6 @@ import {
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
-  type AutomationTargetMode,
   type AutomationTargetInput,
   type AutomationEventSource,
   type TriggerCondition,
@@ -100,7 +99,6 @@ function FieldDescription({
 
 export interface AutomationFormValues {
   name: string;
-  targetMode?: AutomationTargetMode;
   repoOwner?: string;
   repoName?: string;
   baseBranch?: string;
@@ -145,22 +143,14 @@ export function AutomationForm({
   const [name, setName] = useState(initialValues?.name ?? "");
   const [selectedRepos, setSelectedRepos] = useState<string[]>(initialRepoKeys);
   const [repoSelectionMode, setRepoSelectionMode] = useState<RepoSelectionMode>(() =>
-    initialValues?.targetMode === "fixed_multi_repo" || initialRepoKeys.length > 1
-      ? "multiple"
-      : "single"
+    initialRepoKeys.length > 1 ? "multiple" : "single"
   );
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const selectedRepo = selectedRepos[0] ?? "";
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const targetMode: AutomationTargetMode =
-    selectedRepos.length === 0
-      ? "no_repository"
-      : selectedRepos.length === 1
-        ? "fixed_single_repo"
-        : "fixed_multi_repo";
-  const usesSingleRepository = targetMode === "fixed_single_repo";
+  const usesSingleRepository = selectedRepos.length === 1;
   const [baseBranch, setBaseBranch] = useState(initialValues?.baseBranch ?? "");
   const selectedRepoDetails = usesSingleRepository
     ? repos.find((repo) => repo.fullName === selectedRepo)
@@ -349,7 +339,6 @@ export function AutomationForm({
 
     const values: AutomationFormValues = {
       name: name.trim(),
-      targetMode,
       model: resolvedModel,
       reasoningEffort:
         reasoningEffort && isValidReasoningEffort(resolvedModel, reasoningEffort)
@@ -360,11 +349,11 @@ export function AutomationForm({
       instructions: instructions.trim(),
       triggerType,
     };
-    if (targetMode === "fixed_single_repo") {
+    if (selectedRepos.length === 1) {
       values.repoOwner = repoOwner;
       values.repoName = repoName;
       values.baseBranch = resolvedSingleRepoBaseBranch;
-    } else if (targetMode === "fixed_multi_repo") {
+    } else if (selectedRepos.length > 1) {
       values.targets = selectedRepos.map((repoFullName) => {
         const [targetRepoOwner, targetRepoName] = repoFullName.split("/");
         return { repoOwner: targetRepoOwner, repoName: targetRepoName };
@@ -386,16 +375,13 @@ export function AutomationForm({
     }
 
     if (mode === "edit") {
-      const initialMode = initialValues?.targetMode ?? "fixed_single_repo";
       const initialKeys = [...initialRepoKeys].sort().join("\n");
       const currentKeys = [...selectedRepos].sort().join("\n");
       const targetChanged =
-        initialMode !== targetMode ||
         initialKeys !== currentKeys ||
-        (targetMode === "fixed_single_repo" && initialValues?.baseBranch !== baseBranch);
+        (selectedRepos.length === 1 && initialValues?.baseBranch !== resolvedSingleRepoBaseBranch);
 
       if (!targetChanged) {
-        delete (values as Partial<AutomationFormValues>).targetMode;
         delete (values as Partial<AutomationFormValues>).repoOwner;
         delete (values as Partial<AutomationFormValues>).repoName;
         delete (values as Partial<AutomationFormValues>).baseBranch;
@@ -562,8 +548,7 @@ export function AutomationForm({
                 const disabled =
                   multipleSelectionEnabled &&
                   !checked &&
-                  selectedRepos.length >= MAX_MULTI_REPO_TARGETS &&
-                  targetMode !== "no_repository";
+                  selectedRepos.length >= MAX_MULTI_REPO_TARGETS;
 
                 return multipleSelectionEnabled ? (
                   <label

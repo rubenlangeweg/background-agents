@@ -25,12 +25,11 @@ import { formatRepoLabel } from "@/lib/repo-label";
 const RUNS_PAGE_SIZE = 20;
 
 function formatAutomationTargetLabel(automation: {
-  targetMode: string;
   repoOwner: string | null;
   repoName: string | null;
   targets?: unknown[];
 }): string {
-  if (automation.targetMode === "fixed_multi_repo") {
+  if ((automation.targets?.length ?? 0) > 1) {
     const count = automation.targets?.length ?? 0;
     return `${count} ${count === 1 ? "repository" : "repositories"}`;
   }

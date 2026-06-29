@@ -17,7 +17,6 @@ import { conditionRegistry } from "./registry";
 import type { Automation } from "../types";
 
 type EventForSource<S extends AutomationEventSource> = Extract<AutomationEvent, { source: S }>;
-type RepositoryAutomation = Extract<Automation, { targetMode: "fixed_single_repo" }>;
 
 const defaults: Record<AutomationEventSource, () => AutomationEvent> = {
   github: () =>
@@ -109,18 +108,22 @@ export function assertConditionMatch(
 /**
  * Build a minimal trigger automation for testing.
  */
-export function makeTriggerAutomation(
-  overrides?: Partial<RepositoryAutomation>
-): RepositoryAutomation {
-  const automation: RepositoryAutomation = {
+export function makeTriggerAutomation(overrides?: Partial<Automation>): Automation {
+  const automation: Automation = {
     id: "auto-test",
     name: "Test Automation",
-    targetMode: "fixed_single_repo",
     repoOwner: "test-owner",
     repoName: "test-repo",
     baseBranch: "main",
     repoId: 1,
-    targets: [],
+    targets: [
+      {
+        repoOwner: "test-owner",
+        repoName: "test-repo",
+        repoId: 1,
+        baseBranch: "main",
+      },
+    ],
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,
@@ -138,15 +141,6 @@ export function makeTriggerAutomation(
     triggerConfig: { conditions: [] },
     ...overrides,
   };
-
-  automation.targets = [
-    {
-      repoOwner: automation.repoOwner,
-      repoName: automation.repoName,
-      repoId: automation.repoId,
-      baseBranch: automation.baseBranch,
-    },
-  ];
 
   return automation;
 }

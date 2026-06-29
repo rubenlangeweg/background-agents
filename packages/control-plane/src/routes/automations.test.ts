@@ -157,6 +157,27 @@ const sampleRow = {
   deleted_at: null,
 };
 
+const sampleTargets = [
+  {
+    automation_id: "auto-1",
+    repo_owner: "acme",
+    repo_name: "web-app",
+    repo_id: 12345,
+    base_branch: "main",
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    automation_id: "auto-1",
+    repo_owner: "acme",
+    repo_name: "api",
+    repo_id: 67890,
+    base_branch: null,
+    created_at: now,
+    updated_at: now,
+  },
+];
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("automation route handlers", () => {
@@ -217,7 +238,6 @@ describe("automation route handlers", () => {
       expect(mockStore.createWithTargets).toHaveBeenCalledTimes(1);
       expect(mockStore.createWithTargets).toHaveBeenCalledWith(
         expect.objectContaining({
-          target_mode: "fixed_single_repo",
           repo_owner: "acme",
           repo_name: "web-app",
           repo_id: 12345,
@@ -251,10 +271,9 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("creates no_repository automation without repo fields", async () => {
+    it("creates repo-less automation without repo fields", async () => {
       const noRepoRow = {
         ...sampleRow,
-        target_mode: "no_repository",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -266,7 +285,6 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Incident sweep",
-          targetMode: "no_repository",
           scheduleCron: "0 9 * * *",
           scheduleTz: "UTC",
           instructions: "Check recent incidents and summarize.",
@@ -276,7 +294,6 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(201);
       expect(mockStore.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          target_mode: "no_repository",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
@@ -285,10 +302,9 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("creates fixed_multi_repo automation with target rows", async () => {
+    it("creates multi-repository automation with target rows", async () => {
       const multiRepoRow = {
         ...sampleRow,
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -300,7 +316,6 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Weekly AGENTS.md sweep",
-          targetMode: "fixed_multi_repo",
           targets: [
             { repoOwner: "acme", repoName: "web-app" },
             { repoOwner: "acme", repoName: "api" },
@@ -314,7 +329,6 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(201);
       expect(mockStore.createWithTargets).toHaveBeenCalledWith(
         expect.objectContaining({
-          target_mode: "fixed_multi_repo",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
@@ -330,11 +344,10 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("rejects fixed_multi_repo with fewer than two targets", async () => {
+    it("rejects multi-repository automations with fewer than two targets", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Weekly AGENTS.md sweep",
-          targetMode: "fixed_multi_repo",
           targets: [{ repoOwner: "acme", repoName: "web-app" }],
           scheduleCron: "0 9 * * 1",
           scheduleTz: "UTC",
@@ -344,15 +357,14 @@ describe("automation route handlers", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "fixed_multi_repo automations require 2-10 repository targets",
+        error: "multi-repository automations require 2-10 repository targets",
       });
     });
 
-    it("rejects malformed fixed_multi_repo targets", async () => {
+    it("rejects malformed multi-repository targets", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Weekly AGENTS.md sweep",
-          targetMode: "fixed_multi_repo",
           targets: [{ repoOwner: "acme" }, null],
           scheduleCron: "0 9 * * 1",
           scheduleTz: "UTC",
@@ -367,11 +379,10 @@ describe("automation route handlers", () => {
       expect(mockStore.createWithTargets).not.toHaveBeenCalled();
     });
 
-    it("rejects duplicate fixed_multi_repo targets", async () => {
+    it("rejects duplicate multi-repository targets", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "Weekly AGENTS.md sweep",
-          targetMode: "fixed_multi_repo",
           targets: [
             { repoOwner: "ACME", repoName: "web-app" },
             { repoOwner: "acme", repoName: "web-app " },
@@ -389,11 +400,10 @@ describe("automation route handlers", () => {
       expect(mockStore.createWithTargets).not.toHaveBeenCalled();
     });
 
-    it("rejects no_repository for repo-scoped triggers", async () => {
+    it("rejects repo-less repo-scoped triggers", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           name: "PR review",
-          targetMode: "no_repository",
           instructions: "Review the PR.",
           triggerType: "github_event",
           eventType: "pull_request.opened",
@@ -402,7 +412,24 @@ describe("automation route handlers", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "no_repository automations are not supported for repo-scoped triggers",
+        error: "repoOwner and repoName are required for repo-scoped triggers",
+      });
+    });
+
+    it("rejects partial repository fields", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Partial repo",
+          repoOwner: "acme",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "repoOwner and repoName must be provided together",
       });
     });
 
@@ -665,12 +692,11 @@ describe("automation route handlers", () => {
       expect(body.error).toContain("reasoning");
     });
 
-    it("rejects malformed fixed_multi_repo targets in update", async () => {
+    it("rejects malformed multi-repository targets in update", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
-          targetMode: "fixed_multi_repo",
           targets: [{ repoOwner: "acme", repoName: 123 }],
         },
       });
@@ -683,12 +709,11 @@ describe("automation route handlers", () => {
       expect(mockStore.update).not.toHaveBeenCalled();
     });
 
-    it("rejects duplicate fixed_multi_repo targets in update", async () => {
+    it("rejects duplicate multi-repository targets in update", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
-          targetMode: "fixed_multi_repo",
           targets: [
             { repoOwner: "ACME", repoName: "web-app" },
             { repoOwner: "acme", repoName: "web-app " },
@@ -704,40 +729,40 @@ describe("automation route handlers", () => {
       expect(mockStore.update).not.toHaveBeenCalled();
     });
 
-    it("rejects target mode changes after run history exists", async () => {
+    it("rejects repository cardinality changes after run history exists", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.hasRunHistory.mockResolvedValue(true);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
-          targetMode: "no_repository",
+          repoOwner: null,
+          repoName: null,
         },
       });
 
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({
-        error: "Cannot change automation target mode after runs have been created",
+        error: "Cannot change automation repository cardinality after runs have been created",
       });
       expect(mockStore.updateWithTargets).not.toHaveBeenCalled();
       expect(mockStore.update).not.toHaveBeenCalled();
     });
 
-    it("allows same-mode multi-repo target edits after run history exists", async () => {
+    it("allows same-cardinality multi-repo target edits after run history exists", async () => {
       const multiRepoRow = {
         ...sampleRow,
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
         base_branch: null,
       };
       mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
       mockStore.hasRunHistory.mockResolvedValue(true);
       mockStore.updateWithTargets.mockResolvedValue(multiRepoRow);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
-          targetMode: "fixed_multi_repo",
           targets: [
             { repoOwner: "acme", repoName: "web-app" },
             { repoOwner: "acme", repoName: "api" },
@@ -748,7 +773,12 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(200);
       expect(mockStore.updateWithTargets).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ target_mode: "fixed_multi_repo" }),
+        expect.objectContaining({
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        }),
         expect.arrayContaining([
           expect.objectContaining({
             automation_id: "auto-1",
@@ -759,16 +789,16 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("ignores baseBranch-only updates for existing fixed_multi_repo automations", async () => {
+    it("ignores baseBranch-only updates for existing multi-repo automations", async () => {
       const multiRepoRow = {
         ...sampleRow,
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
         base_branch: null,
       };
       mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
       mockStore.update.mockResolvedValue(multiRepoRow);
 
       const res = await callRoute("PUT", "/automations/auto-1", {
@@ -782,24 +812,21 @@ describe("automation route handlers", () => {
       expect(mockStore.update).toHaveBeenCalledWith("auto-1", {});
     });
 
-    it("accepts legacy fixed_multi_repo update payloads without requiring targets", async () => {
+    it("updates non-target fields on multi-repo automations without requiring targets", async () => {
       const multiRepoRow = {
         ...sampleRow,
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
         base_branch: null,
       };
       mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
       mockStore.update.mockResolvedValue({ ...multiRepoRow, name: "Updated" });
 
       const res = await callRoute("PUT", "/automations/auto-1", {
         body: {
           name: "Updated",
-          targetMode: "fixed_multi_repo",
-          repoOwner: null,
-          repoName: null,
           baseBranch: "main",
         },
       });
@@ -1010,10 +1037,9 @@ describe("automation route handlers", () => {
       });
     });
 
-    it("returns grouped runs with flattened child runs for fixed_multi_repo automations", async () => {
+    it("returns grouped runs with flattened child runs for multi-repo automations", async () => {
       const multiRepoRow = {
         ...sampleRow,
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
@@ -1030,6 +1056,7 @@ describe("automation route handlers", () => {
         total_runs: 2,
       };
       mockStore.getById.mockResolvedValue(multiRepoRow);
+      mockStore.getTargetsForAutomation.mockResolvedValue(sampleTargets);
       mockStore.listRunGroupsForAutomation.mockResolvedValue({
         groups: [group],
         total: 1,

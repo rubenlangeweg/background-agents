@@ -51,7 +51,6 @@ function createAutomation(): Automation {
   return {
     id: "auto-1",
     name: "Weekly sweep",
-    targetMode: "fixed_multi_repo",
     repoOwner: null,
     repoName: null,
     repoId: null,

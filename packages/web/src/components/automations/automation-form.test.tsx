@@ -172,7 +172,7 @@ describe("automation cron submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("submits no_repository automations without repo fields", () => {
+  it("submits repo-less automations without repo fields", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -200,7 +200,6 @@ describe("automation cron submission", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       name: "Check incidents",
-      targetMode: "no_repository",
       instructions: "Inspect recent alerts and send a summary.",
     });
     expect(onSubmit.mock.calls[0][0].repoOwner).toBeUndefined();
@@ -233,7 +232,6 @@ describe("automation cron submission", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      targetMode: "fixed_single_repo",
       repoOwner: "open-inspect",
       repoName: "control-plane",
     });
@@ -286,7 +284,6 @@ describe("automation cron submission", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      targetMode: "fixed_single_repo",
       repoOwner: "open-inspect",
       repoName: "control-plane",
       baseBranch: "develop",
@@ -319,7 +316,6 @@ describe("automation cron submission", () => {
     expect(screen.getByRole("button", { name: "Select One" })).toBeInTheDocument();
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      targetMode: "fixed_multi_repo",
       targets: [
         { repoOwner: "open-inspect", repoName: "background-agents" },
         { repoOwner: "open-inspect", repoName: "control-plane" },
@@ -375,7 +371,6 @@ describe("automation cron submission", () => {
         }}
       />
     );
-
     fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
 
     expect(screen.getAllByText("open-inspect/background-agents").length).toBeGreaterThan(0);

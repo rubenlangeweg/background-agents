@@ -41,6 +41,7 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
+  normalizeOptionalRepositoryTarget,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -164,7 +165,7 @@ function validateTargetInputs(
 
   if (normalized.length < options.min || normalized.length > options.max) {
     return {
-      error: `fixed_multi_repo automations require ${options.min}-${options.max} repository targets`,
+      error: `multi-repository automations require ${options.min}-${options.max} repository targets`,
     };
   }
 
@@ -249,16 +250,14 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  const targetMode = body.targetMode ?? "fixed_single_repo";
+  const repoTarget = normalizeOptionalRepositoryTarget(body);
+  if (!repoTarget.ok) return error(repoTarget.message, 400);
+  const hasMultiRepoTargets = body.targets !== undefined;
   if (
-    targetMode !== "fixed_single_repo" &&
-    targetMode !== "fixed_multi_repo" &&
-    targetMode !== "no_repository"
+    hasMultiRepoTargets &&
+    (body.repoOwner !== undefined || body.repoName !== undefined || body.baseBranch !== undefined)
   ) {
-    return error(
-      "targetMode must be one of: fixed_single_repo, fixed_multi_repo, no_repository",
-      400
-    );
+    return error("repoOwner, repoName, and baseBranch cannot be provided with targets", 400);
   }
 
   // Validate trigger type
@@ -274,25 +273,18 @@ async function handleCreateAutomation(
   if (!validTriggerTypes.includes(triggerType)) {
     return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
   }
-  if (
-    targetMode === "no_repository" &&
-    (triggerType === "github_event" || triggerType === "linear_event")
-  ) {
-    return error("no_repository automations are not supported for repo-scoped triggers", 400);
+  if (!repoTarget.target && (triggerType === "github_event" || triggerType === "linear_event")) {
+    return error("repoOwner and repoName are required for repo-scoped triggers", 400);
   }
-  if (targetMode === "fixed_multi_repo" && triggerType !== "schedule") {
-    return error("fixed_multi_repo automations are only supported for schedule triggers", 400);
+  if (hasMultiRepoTargets && triggerType !== "schedule") {
+    return error("multi-repository automations are only supported for schedule triggers", 400);
   }
-  if (targetMode === "fixed_single_repo" && (!body.repoOwner?.trim() || !body.repoName?.trim())) {
-    return error("repoOwner and repoName are required", 400);
-  }
-  const targetInputs =
-    targetMode === "fixed_multi_repo"
-      ? validateTargetInputs(body.targets, {
-          min: MIN_MULTI_REPO_TARGETS,
-          max: MAX_MULTI_REPO_TARGETS,
-        })
-      : { targets: [] };
+  const targetInputs = hasMultiRepoTargets
+    ? validateTargetInputs(body.targets, {
+        min: MIN_MULTI_REPO_TARGETS,
+        max: MAX_MULTI_REPO_TARGETS,
+      })
+    : { targets: [] };
   if ("error" in targetInputs) {
     return error(targetInputs.error, 400);
   }
@@ -360,11 +352,9 @@ async function handleCreateAutomation(
   let baseBranch: string | null = null;
   let targetRows: AutomationTargetRow[] = [];
 
-  if (targetMode === "fixed_single_repo") {
-    ({ repoOwner, repoName } = normalizeTargetInput({
-      repoOwner: body.repoOwner!,
-      repoName: body.repoName!,
-    }));
+  if (repoTarget.target) {
+    repoOwner = repoTarget.target.repoOwner;
+    repoName = repoTarget.target.repoName;
 
     const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
     if (resolved instanceof Response) return resolved;
@@ -382,7 +372,7 @@ async function handleCreateAutomation(
         updated_at: Date.now(),
       },
     ];
-  } else if (targetMode === "fixed_multi_repo") {
+  } else if (hasMultiRepoTargets) {
     const resolvedTargets = await resolveAutomationTargets(env, targetInputs.targets, ctx);
     if (resolvedTargets instanceof Response) return resolvedTargets;
     targetRows = resolvedTargets;
@@ -439,7 +429,6 @@ async function handleCreateAutomation(
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
-    target_mode: targetMode,
     repo_owner: repoOwner,
     repo_name: repoName,
     base_branch: baseBranch,
@@ -486,7 +475,6 @@ async function handleCreateAutomation(
   logger.info("automation.created", {
     event: "automation.created",
     automation_id: id,
-    target_mode: targetMode,
     repo: repoOwner && repoName ? `${repoOwner}/${repoName}` : null,
     trigger_type: triggerType,
     request_id: ctx.request_id,
@@ -588,17 +576,18 @@ async function handleUpdateAutomation(
     return error("Invalid model", 400);
   }
 
-  const existingTargetMode = existing.target_mode ?? "fixed_single_repo";
-  const nextTargetMode = body.targetMode ?? existingTargetMode;
-  const targetModeChangeRequested =
-    body.targetMode !== undefined && body.targetMode !== existingTargetMode;
-  const singleRepoTargetChangeRequested =
-    nextTargetMode === "fixed_single_repo" &&
-    (body.repoOwner !== undefined || body.repoName !== undefined || body.baseBranch !== undefined);
-  const multiRepoTargetChangeRequested =
-    nextTargetMode === "fixed_multi_repo" && body.targets !== undefined;
+  const existingTargets = await store.getTargetsForAutomation(id);
+  const existingTargetCount =
+    existingTargets.length > 0
+      ? existingTargets.length
+      : existing.repo_owner && existing.repo_name
+        ? 1
+        : 0;
   const targetChangeRequested =
-    targetModeChangeRequested || singleRepoTargetChangeRequested || multiRepoTargetChangeRequested;
+    body.targets !== undefined ||
+    body.repoOwner !== undefined ||
+    body.repoName !== undefined ||
+    (body.baseBranch !== undefined && existingTargetCount <= 1);
 
   let targetRowsForUpdate: AutomationTargetRow[] | null = null;
   let targetFieldUpdates: Partial<AutomationRow> = {};
@@ -612,75 +601,19 @@ async function handleUpdateAutomation(
       return error("Cannot change automation targets while a run is active", 409);
     }
 
-    if (nextTargetMode !== existingTargetMode && (await store.hasRunHistory(id))) {
-      return error("Cannot change automation target mode after runs have been created", 409);
-    }
+    let nextTargetCount: number;
 
-    if (
-      nextTargetMode !== "fixed_single_repo" &&
-      nextTargetMode !== "fixed_multi_repo" &&
-      nextTargetMode !== "no_repository"
-    ) {
-      return error(
-        "targetMode must be one of: fixed_single_repo, fixed_multi_repo, no_repository",
-        400
-      );
-    }
-
-    if (
-      nextTargetMode === "no_repository" &&
-      (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event")
-    ) {
-      return error("no_repository automations are not supported for repo-scoped triggers", 400);
-    }
-
-    if (nextTargetMode === "fixed_multi_repo" && existing.trigger_type !== "schedule") {
-      return error("fixed_multi_repo automations are only supported for schedule triggers", 400);
-    }
-
-    if (nextTargetMode === "no_repository") {
-      targetRowsForUpdate = [];
-      targetFieldUpdates = {
-        target_mode: "no_repository",
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      };
-    } else if (nextTargetMode === "fixed_single_repo") {
-      const normalizedTarget = normalizeTargetInput({
-        repoOwner: body.repoOwner ?? existing.repo_owner ?? "",
-        repoName: body.repoName ?? existing.repo_name ?? "",
-      });
-      const repoOwner = normalizedTarget.repoOwner;
-      const repoName = normalizedTarget.repoName;
-      if (!repoOwner || !repoName) {
-        return error("repoOwner and repoName are required", 400);
+    if (body.targets !== undefined) {
+      if (
+        body.repoOwner !== undefined ||
+        body.repoName !== undefined ||
+        body.baseBranch !== undefined
+      ) {
+        return error("repoOwner, repoName, and baseBranch cannot be provided with targets", 400);
       }
-
-      const resolved = await resolveRepoOrError(env, repoOwner, repoName, ctx, logger);
-      if (resolved instanceof Response) return resolved;
-      const baseBranch = body.baseBranch ?? existing.base_branch ?? resolved.defaultBranch;
-      const now = Date.now();
-      targetRowsForUpdate = [
-        {
-          automation_id: id,
-          repo_owner: resolved.repoOwner.toLowerCase(),
-          repo_name: resolved.repoName.toLowerCase(),
-          repo_id: resolved.repoId,
-          base_branch: baseBranch,
-          created_at: now,
-          updated_at: now,
-        },
-      ];
-      targetFieldUpdates = {
-        target_mode: "fixed_single_repo",
-        repo_owner: resolved.repoOwner.toLowerCase(),
-        repo_name: resolved.repoName.toLowerCase(),
-        repo_id: resolved.repoId,
-        base_branch: baseBranch,
-      };
-    } else {
+      if (existing.trigger_type !== "schedule") {
+        return error("multi-repository automations are only supported for schedule triggers", 400);
+      }
       const targetInputs = validateTargetInputs(body.targets, {
         min: MIN_MULTI_REPO_TARGETS,
         max: MAX_MULTI_REPO_TARGETS,
@@ -692,12 +625,72 @@ async function handleUpdateAutomation(
       if (resolvedTargets instanceof Response) return resolvedTargets;
       targetRowsForUpdate = resolvedTargets.map((target) => ({ ...target, automation_id: id }));
       targetFieldUpdates = {
-        target_mode: "fixed_multi_repo",
         repo_owner: null,
         repo_name: null,
         repo_id: null,
         base_branch: null,
       };
+      nextTargetCount = targetRowsForUpdate.length;
+    } else {
+      const repoTarget = normalizeOptionalRepositoryTarget({
+        repoOwner: body.repoOwner !== undefined ? body.repoOwner : existing.repo_owner,
+        repoName: body.repoName !== undefined ? body.repoName : existing.repo_name,
+      });
+      if (!repoTarget.ok) return error(repoTarget.message, 400);
+
+      if (
+        !repoTarget.target &&
+        (existing.trigger_type === "github_event" || existing.trigger_type === "linear_event")
+      ) {
+        return error("repoOwner and repoName are required for repo-scoped triggers", 400);
+      }
+
+      if (!repoTarget.target) {
+        targetRowsForUpdate = [];
+        targetFieldUpdates = {
+          repo_owner: null,
+          repo_name: null,
+          repo_id: null,
+          base_branch: null,
+        };
+        nextTargetCount = 0;
+      } else {
+        const resolved = await resolveRepoOrError(
+          env,
+          repoTarget.target.repoOwner,
+          repoTarget.target.repoName,
+          ctx,
+          logger
+        );
+        if (resolved instanceof Response) return resolved;
+        const baseBranch = body.baseBranch ?? existing.base_branch ?? resolved.defaultBranch;
+        const now = Date.now();
+        targetRowsForUpdate = [
+          {
+            automation_id: id,
+            repo_owner: resolved.repoOwner.toLowerCase(),
+            repo_name: resolved.repoName.toLowerCase(),
+            repo_id: resolved.repoId,
+            base_branch: baseBranch,
+            created_at: now,
+            updated_at: now,
+          },
+        ];
+        targetFieldUpdates = {
+          repo_owner: resolved.repoOwner.toLowerCase(),
+          repo_name: resolved.repoName.toLowerCase(),
+          repo_id: resolved.repoId,
+          base_branch: baseBranch,
+        };
+        nextTargetCount = 1;
+      }
+    }
+
+    if (nextTargetCount !== existingTargetCount && (await store.hasRunHistory(id))) {
+      return error(
+        "Cannot change automation repository cardinality after runs have been created",
+        409
+      );
     }
   }
 
@@ -1011,7 +1004,8 @@ async function handleListRuns(
   const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "20") || 20, 100));
   const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0") || 0);
 
-  if (automation.target_mode === "fixed_multi_repo") {
+  const targets = await store.getTargetsForAutomation(automationId);
+  if (targets.length > 1) {
     const result = await store.listRunGroupsForAutomation(automationId, { limit, offset });
     const groups = result.groups.map(toAutomationRunGroup);
     return json({

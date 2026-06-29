@@ -2,12 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { AutomationRow, AutomationTargetRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { SourceControlProvider } from "../source-control";
-import { resolveAutomationTarget, resolveAutomationTargetRow } from "./target-resolution";
+import { resolveAutomationSessionLaunches, resolveAutomationTargetRow } from "./target-resolution";
 
 const automation: AutomationRow = {
   id: "auto-1",
   name: "Daily sync",
-  target_mode: "fixed_single_repo",
   repo_owner: "ACME",
   repo_name: "Web-App",
   base_branch: "release",
@@ -58,12 +57,16 @@ describe("automation target resolution", () => {
       defaultBranch: "main",
     });
 
-    await expect(resolveAutomationTarget({} as Env, automation, provider)).resolves.toEqual({
-      repoOwner: "acme",
-      repoName: "web-app",
-      repoId: 98765,
-      baseBranch: "release",
-    });
+    await expect(
+      resolveAutomationSessionLaunches({} as Env, automation, provider)
+    ).resolves.toEqual([
+      {
+        repoOwner: "acme",
+        repoName: "web-app",
+        repoId: 98765,
+        baseBranch: "release",
+      },
+    ]);
 
     expect(provider.checkRepositoryAccess).toHaveBeenCalledWith({
       owner: "ACME",
@@ -79,16 +82,16 @@ describe("automation target resolution", () => {
       defaultBranch: "develop",
     });
 
-    const result = await resolveAutomationTarget(
+    const result = await resolveAutomationSessionLaunches(
       {} as Env,
       { ...automation, base_branch: "" },
       provider
     );
 
-    expect(result).toMatchObject({ baseBranch: "develop" });
+    expect(result[0]).toMatchObject({ baseBranch: "develop" });
   });
 
-  it("resolves no_repository without checking repository access", async () => {
+  it("resolves repo-less launches without checking repository access", async () => {
     const provider = createProvider({
       repoId: 98765,
       repoOwner: "acme",
@@ -97,11 +100,10 @@ describe("automation target resolution", () => {
     });
 
     await expect(
-      resolveAutomationTarget(
+      resolveAutomationSessionLaunches(
         {} as Env,
         {
           ...automation,
-          target_mode: "no_repository",
           repo_owner: null,
           repo_name: null,
           repo_id: null,
@@ -109,27 +111,29 @@ describe("automation target resolution", () => {
         },
         provider
       )
-    ).resolves.toEqual({ repoOwner: null, repoName: null, repoId: null, baseBranch: null });
+    ).resolves.toEqual([{ repoOwner: null, repoName: null, repoId: null, baseBranch: null }]);
 
     expect(provider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
 
-  it("fails when the fixed repository is not accessible", async () => {
+  it("fails when the configured repository is not accessible", async () => {
     const provider = createProvider(null);
 
-    await expect(resolveAutomationTarget({} as Env, automation, provider)).rejects.toThrow(
+    await expect(resolveAutomationSessionLaunches({} as Env, automation, provider)).rejects.toThrow(
       "Repository is not accessible for the configured SCM provider"
     );
   });
 
-  it("rejects unknown target modes", async () => {
+  it("rejects partial repository fields", async () => {
     await expect(
-      resolveAutomationTarget(
+      resolveAutomationSessionLaunches(
         {} as Env,
-        { ...automation, target_mode: "unknown_mode" },
+        { ...automation, repo_name: null },
         createProvider(null)
       )
-    ).rejects.toThrow("Unsupported automation target mode: unknown_mode");
+    ).rejects.toThrow(
+      "Automation repository target must include repo_owner and repo_name together"
+    );
   });
 
   it("validates target row access and returns child run repo fields", async () => {

@@ -19,7 +19,6 @@ SELECT
   id, repo_owner, repo_name, repo_id, base_branch, created_at, updated_at
 FROM automations
 WHERE deleted_at IS NULL
-  AND COALESCE(target_mode, 'fixed_single_repo') = 'fixed_single_repo'
   AND repo_owner IS NOT NULL
   AND repo_name IS NOT NULL;
 

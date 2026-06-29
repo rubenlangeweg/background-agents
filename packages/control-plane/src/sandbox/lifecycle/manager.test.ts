@@ -505,7 +505,7 @@ describe("SandboxLifecycleManager", () => {
           repoOwner: null,
           repoName: null,
           branch: null,
-          codeServerEnabled: false,
+          codeServerEnabled: true,
           agentSlackNotifyEnabled: false,
           repoImageId: null,
           repoImageSha: null,

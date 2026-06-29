@@ -23,7 +23,8 @@ describe("boundary schemas", () => {
 
     it("parses a repo-less session creation request for route-level validation", () => {
       const result = createSessionRequestSchema.safeParse({
-        title: "Investigate issue",
+        title: "Incident sweep",
+        model: "anthropic/claude-sonnet-4-6",
       });
 
       expect(result.success).toBe(true);
@@ -44,6 +45,15 @@ describe("boundary schemas", () => {
     it("rejects malformed session creation field types", () => {
       const result = createSessionRequestSchema.safeParse({
         repoOwner: 123,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a whitespace-only partial repository session creation request", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "   ",
+        repoName: "background-agents",
       });
 
       expect(result.success).toBe(false);

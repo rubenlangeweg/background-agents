@@ -55,7 +55,7 @@ function describeTrigger(automation: Automation): string {
 }
 
 function describeTarget(automation: Automation): string {
-  if (automation.targetMode === "fixed_multi_repo") {
+  if (automation.targets.length > 1) {
     const count = automation.targets.length;
     return `${count} ${count === 1 ? "repository" : "repositories"}`;
   }

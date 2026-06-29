@@ -173,14 +173,14 @@ work.
 
 ### Can users edit the selected repo set after creation?
 
-Answer: yes, but only within the same target mode and only when there is no active group or run for
-that automation. After an automation has run history, changing between `no_repository`,
-`fixed_single_repo`, and `fixed_multi_repo` is blocked; create a new automation instead.
+Answer: yes, but only while the automation has no active group or run. After an automation has run
+history, changing repository cardinality between zero, one, and many targets is blocked; create a
+new automation instead.
 
 Reasoning: maintenance repo sets change as repositories are added or retired. Recreating an
-automation just to add or remove a repo is unnecessary friction. However, target mode changes alter
+automation just to add or remove a repo is unnecessary friction. However, cardinality changes alter
 the run-history shape and pagination semantics, making older runs confusing or hidden. The server
-must enforce the active-run guard and target-mode immutability after history exists; the UI should
+must enforce the active-run guard and cardinality immutability after history exists; the UI should
 disable target edits while active.
 
 ### How should target repositories be stored?
@@ -191,19 +191,21 @@ Reasoning: target rows need validation, listing, counting, joining to child runs
 future fields such as per-repo branch override. A JSON blob would push parsing and validation into
 every path.
 
-### What should the target mode be called?
+### Should target mode be the durable product model?
 
-Answer: add `fixed_multi_repo`.
+Answer: no. Repository context is modeled as zero, one, or many repository targets.
 
-Reasoning: it extends the current target modes with minimal disruption: `fixed_single_repo`,
-`fixed_multi_repo`, and `no_repository`. Keep the legacy single-repo fields for compatibility and
-add a `targets` array for multi-repo.
+Reasoning: a target-mode enum packs repository absence, repository count, trigger compatibility, and
+launch materialization into one field. The durable model should stay closer to the data: repo-less
+automations have no repository target, single-repo automations keep the direct repo fields and a
+normalized target row, and multi-repo automations use multiple normalized target rows. The scheduler
+derives launch behavior from resolved targets.
 
-### Should `fixed_multi_repo` allow one repository?
+### Should multi-repo selection allow one repository?
 
 Answer: no. Require 2-10 repositories.
 
-Reasoning: one repository should use `fixed_single_repo`. This keeps validation clear and catches
+Reasoning: one repository should use the single-repo path. This keeps validation clear and catches
 accidental states where a multi-repo selection was reduced to one repo.
 
 ### Should duplicate target repositories be silently deduplicated?
@@ -217,11 +219,11 @@ before comparison.
 
 ### How should the repository picker work?
 
-Answer: derive target mode from the picker selection.
+Answer: derive repository context from the picker selection.
 
-Reasoning: users should not need to understand an internal target mode before picking repositories.
-Selecting "No Repository" maps to `no_repository`, one repository maps to `fixed_single_repo`, and
-2-10 repositories map to `fixed_multi_repo`.
+Reasoning: users should not need to understand an internal mode before picking repositories.
+Selecting no repository creates a repo-less automation, selecting one repository creates a
+single-repo automation, and selecting 2-10 repositories creates grouped multi-repo runs.
 
 ### Should instructions be per-repository?
 
@@ -248,8 +250,9 @@ inspection shows the database is already correct.
 
 Reasoning: `scripts/d1-migrate.sh` applies each SQL file and then records the version in
 `_schema_migrations`. Migration `0030` is safe to rerun if the SQL file succeeds but the marker
-insert fails, if an older attempt added only some `automation_runs` columns, or if the replay resumes
-after `automation_runs` was dropped and the populated shadow table is still present.
+insert fails, if an older attempt added only some `automation_runs` columns, or if the replay
+resumes after `automation_runs` was dropped and the populated shadow table is still present.
 
-Recovery checklist: rerun `terraform apply` with the replay-safe migration. If the rerun still fails,
-inspect the D1 error and the current schema before inserting anything into `_schema_migrations`.
+Recovery checklist: rerun `terraform apply` with the replay-safe migration. If the rerun still
+fails, inspect the D1 error and the current schema before inserting anything into
+`_schema_migrations`.

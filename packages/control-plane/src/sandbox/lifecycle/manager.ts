@@ -438,7 +438,7 @@ export class SandboxLifecycleManager {
 
       const mcpServers = await this.loadMcpServers(session);
 
-      const codeServerEnabled = hasRepository && session.code_server_enabled === 1;
+      const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
@@ -597,7 +597,6 @@ export class SandboxLifecycleManager {
       const now = Date.now();
       const sandboxAuthToken = this.idGenerator.generateId();
       const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
-      const hasRepository = sessionHasRepository(session);
       const expectedSandboxId = buildSandboxIdForSession(session, now);
 
       // Store expected sandbox ID and auth token
@@ -621,7 +620,7 @@ export class SandboxLifecycleManager {
       const timeoutSeconds =
         session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
 
-      const codeServerEnabled = hasRepository && session.code_server_enabled === 1;
+      const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(session);
       const sandboxSettings = this.parseSandboxSettings(session);
@@ -749,7 +748,7 @@ export class SandboxLifecycleManager {
         sessionId: session.session_name || session.id,
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
-        codeServerEnabled: sessionHasRepository(session) && session.code_server_enabled === 1,
+        codeServerEnabled: session.code_server_enabled === 1,
         sandboxSettings: this.parseSandboxSettings(session),
       });
 
