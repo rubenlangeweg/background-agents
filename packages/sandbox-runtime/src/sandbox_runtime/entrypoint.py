@@ -57,9 +57,6 @@ AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
 
 AGENT_TOOLS_REQUIRING_REPOSITORY = {
     "spawn-task.js",
-    "get-task-status.js",
-    "get-task-status-format.js",
-    "cancel-task.js",
 }
 
 # Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
