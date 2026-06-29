@@ -427,10 +427,22 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
           id,
           session_name,
           title,
-          CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_owner END,
-          CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_name END,
-          CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_id END,
-          CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE base_branch END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE normalized_repo_owner
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE normalized_repo_name
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE repo_id
+          END,
+          CASE
+            WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+            ELSE base_branch
+          END,
           branch_name,
           base_sha,
           current_sha,
@@ -446,7 +458,19 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
           sandbox_settings,
           created_at,
           updated_at
-        FROM session;
+        FROM (
+          SELECT
+            *,
+            NULLIF(
+              TRIM(repo_owner, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+              ''
+            ) AS normalized_repo_owner,
+            NULLIF(
+              TRIM(repo_name, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+              ''
+            ) AS normalized_repo_name
+          FROM session
+        );
 
         DROP TABLE IF EXISTS session;
         ALTER TABLE session_0031_new RENAME TO session;

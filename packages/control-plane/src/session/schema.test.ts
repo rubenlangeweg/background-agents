@@ -208,20 +208,17 @@ describe("applyMigrations", () => {
     const sessionRepoMigration = mock.calls.find(
       (c) =>
         c.query.includes("session_0031_new") &&
-        c.query.includes(
-          "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_owner END"
-        )
+        c.query.includes("normalized_repo_owner") &&
+        c.query.includes("normalized_repo_name")
     );
 
     expect(sessionRepoMigration).toBeDefined();
+    expect(sessionRepoMigration!.query).toContain("TRIM(repo_owner");
+    expect(sessionRepoMigration!.query).toContain("TRIM(repo_name");
     expect(sessionRepoMigration!.query).toContain(
-      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_name END"
+      "WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL"
     );
-    expect(sessionRepoMigration!.query).toContain(
-      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_id END"
-    );
-    expect(sessionRepoMigration!.query).toContain(
-      "CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE base_branch END"
-    );
+    expect(sessionRepoMigration!.query).toContain("ELSE repo_id");
+    expect(sessionRepoMigration!.query).toContain("ELSE base_branch");
   });
 });

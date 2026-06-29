@@ -37,14 +37,23 @@ INSERT OR REPLACE INTO sessions_0031_new (
 SELECT
   id,
   title,
-  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_owner END,
-  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE repo_name END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE normalized_repo_owner
+  END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE normalized_repo_name
+  END,
   model,
   status,
   created_at,
   updated_at,
   reasoning_effort,
-  CASE WHEN repo_owner IS NULL OR repo_name IS NULL THEN NULL ELSE base_branch END,
+  CASE
+    WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL
+    ELSE base_branch
+  END,
   parent_session_id,
   spawn_source,
   spawn_depth,
@@ -56,7 +65,19 @@ SELECT
   message_count,
   pr_count,
   user_id
-FROM sessions;
+FROM (
+  SELECT
+    *,
+    NULLIF(
+      TRIM(repo_owner, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+      ''
+    ) AS normalized_repo_owner,
+    NULLIF(
+      TRIM(repo_name, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)),
+      ''
+    ) AS normalized_repo_name
+  FROM sessions
+);
 
 DROP TABLE IF EXISTS sessions;
 ALTER TABLE sessions_0031_new RENAME TO sessions;
