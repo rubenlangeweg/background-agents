@@ -417,7 +417,7 @@ describe("handleSlackNotify", () => {
     expect(logEntry?.request_reason).toBe("user asked");
   });
 
-  it("uses global settings and a no-repository audit label for no-repo sessions", async () => {
+  it("uses global settings and a null repo audit field for no-repo sessions", async () => {
     seedActiveSession({
       parentSessionId: "parent-1",
       spawnSource: "automation",
@@ -447,7 +447,7 @@ describe("handleSlackNotify", () => {
 
     const logEntry = lastLogPayload(consoleLogSpy, "Slack notification posted");
     expect(logEntry).toBeDefined();
-    expect(logEntry?.repo).toBe("No repository");
+    expect(logEntry?.repo).toBeNull();
   });
 
   it("uses global wording when global Slack settings disable notifications", async () => {
