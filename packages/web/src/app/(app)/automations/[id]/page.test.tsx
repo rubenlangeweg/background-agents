@@ -89,6 +89,7 @@ function createGroup(id: string, skipReason: string): AutomationRunGroup {
     completedAt: Date.now(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    failureCountedAt: null,
     totalRuns: 0,
     startingRuns: 0,
     runningRuns: 0,

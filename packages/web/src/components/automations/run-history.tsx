@@ -33,6 +33,41 @@ function formatDuration(startedAt: number | null, completedAt: number | null): s
   return `${hours}h ${remainingMinutes}m`;
 }
 
+function formatRunCounts(group: AutomationRunGroup): string {
+  const activeRuns = group.runningRuns + group.startingRuns;
+  const parts = [`${group.completedRuns} completed`];
+  if (group.failedRuns > 0) parts.push(`${group.failedRuns} failed`);
+  if (group.skippedRuns > 0) parts.push(`${group.skippedRuns} skipped`);
+  if (activeRuns > 0) parts.push(`${activeRuns} running`);
+  return parts.join(", ");
+}
+
+function formatReason(reason: string): string {
+  if (reason === "concurrent_run_active") return "Skipped because another run group is active";
+  return reason;
+}
+
+function formatTargets(runs: AutomationRun[]): string {
+  const targets = runs
+    .map((run) =>
+      run.targetRepoOwner && run.targetRepoName
+        ? `${run.targetRepoOwner}/${run.targetRepoName}`
+        : null
+    )
+    .filter((target): target is string => target !== null);
+
+  return targets.length > 0 ? targets.join(", ") : "No repository target recorded";
+}
+
+function ReceiptItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium uppercase text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 break-words text-xs text-foreground">{value}</dd>
+    </div>
+  );
+}
+
 interface RunHistoryProps {
   runs: AutomationRun[];
   groups?: AutomationRunGroup[];
@@ -70,6 +105,11 @@ export function RunHistory({
           const duration = formatDuration(group.startedAt, group.completedAt);
           const hasChildRuns = group.totalRuns > 0;
           const groupSummary = group.failureReason ?? group.skipReason;
+          const autoPauseSignal = group.failureCountedAt
+            ? `Failure counted toward pause threshold at ${new Date(
+                group.failureCountedAt
+              ).toLocaleString()}`
+            : null;
           return (
             <div key={group.id} className="px-4 py-3">
               <button
@@ -100,16 +140,12 @@ export function RunHistory({
                         {group.totalRuns} {group.totalRuns === 1 ? "repository" : "repositories"}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {group.completedRuns} completed
-                        {group.failedRuns > 0 ? `, ${group.failedRuns} failed` : ""}
-                        {group.runningRuns + group.startingRuns > 0
-                          ? `, ${group.runningRuns + group.startingRuns} running`
-                          : ""}
+                        {formatRunCounts(group)}
                       </span>
                     </>
                   ) : (
                     <span className="text-sm text-muted-foreground">
-                      {groupSummary ?? "No repository sessions started"}
+                      {groupSummary ? formatReason(groupSummary) : "No repository sessions started"}
                     </span>
                   )}
                   {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
@@ -119,48 +155,72 @@ export function RunHistory({
                 </span>
               </button>
               {expanded && hasChildRuns && (
-                <div className="mt-3 space-y-2 border-l border-border-muted pl-5">
-                  {group.runs.map((run) => {
-                    const childDuration = formatDuration(run.startedAt, run.completedAt);
-                    const target =
-                      run.targetRepoOwner && run.targetRepoName
-                        ? `${run.targetRepoOwner}/${run.targetRepoName}`
-                        : run.sessionTitle;
-                    return (
-                      <div key={run.id} className="space-y-1">
-                        <div className="flex items-center justify-between gap-3 text-sm">
-                          <div className="flex min-w-0 items-center gap-2">
-                            {statusBadge(run.status)}
-                            <span className="truncate text-foreground">{target}</span>
-                            {childDuration && (
-                              <span className="text-xs text-muted-foreground">{childDuration}</span>
+                <div className="mt-3 space-y-3 border-t border-border-muted pt-3">
+                  <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+                    <ReceiptItem label="Parent run" value={group.id} />
+                    <ReceiptItem label="Targets" value={formatTargets(group.runs)} />
+                    {group.skipReason && (
+                      <ReceiptItem
+                        label="Overlap decision"
+                        value={formatReason(group.skipReason)}
+                      />
+                    )}
+                    {group.failureReason && (
+                      <ReceiptItem label="Group failure" value={group.failureReason} />
+                    )}
+                    {autoPauseSignal && (
+                      <ReceiptItem label="Auto-pause signal" value={autoPauseSignal} />
+                    )}
+                  </dl>
+                  <div className="space-y-2">
+                    {group.runs.map((run) => {
+                      const childDuration = formatDuration(run.startedAt, run.completedAt);
+                      const target =
+                        run.targetRepoOwner && run.targetRepoName
+                          ? `${run.targetRepoOwner}/${run.targetRepoName}`
+                          : (run.sessionTitle ?? "No repository target");
+                      return (
+                        <div key={run.id} className="space-y-1">
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <div className="flex min-w-0 items-center gap-2">
+                              {statusBadge(run.status)}
+                              <span className="truncate text-foreground">{target}</span>
+                              {childDuration && (
+                                <span className="text-xs text-muted-foreground">
+                                  {childDuration}
+                                </span>
+                              )}
+                            </div>
+                            {run.sessionId && (
+                              <Link
+                                href={`/session/${run.sessionId}`}
+                                className="flex-shrink-0 text-xs text-accent hover:underline"
+                              >
+                                View session
+                              </Link>
                             )}
                           </div>
-                          {run.sessionId && (
-                            <Link
-                              href={`/session/${run.sessionId}`}
-                              className="flex-shrink-0 text-xs text-accent hover:underline"
-                            >
-                              View session
-                            </Link>
+                          <p className="text-xs text-muted-foreground">
+                            Run {run.id}
+                            {run.sessionId ? `, session ${run.sessionId}` : ", no session"}
+                          </p>
+                          {run.failureReason && (
+                            <p className="text-xs text-destructive">{run.failureReason}</p>
+                          )}
+                          {!run.failureReason && run.skipReason && (
+                            <p className="text-xs text-warning">{formatReason(run.skipReason)}</p>
                           )}
                         </div>
-                        {run.failureReason && (
-                          <p className="text-xs text-destructive">{run.failureReason}</p>
-                        )}
-                        {!run.failureReason && run.skipReason && (
-                          <p className="text-xs text-warning">{run.skipReason}</p>
-                        )}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {hasChildRuns && group.failureReason && (
                 <p className="mt-1 text-xs text-destructive">{group.failureReason}</p>
               )}
               {hasChildRuns && !group.failureReason && group.skipReason && (
-                <p className="mt-1 text-xs text-warning">{group.skipReason}</p>
+                <p className="mt-1 text-xs text-warning">{formatReason(group.skipReason)}</p>
               )}
             </div>
           );

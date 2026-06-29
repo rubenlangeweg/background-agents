@@ -24,6 +24,7 @@ describe("RunHistory", () => {
       completedAt: Date.now(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      failureCountedAt: null,
       totalRuns: 0,
       startingRuns: 0,
       runningRuns: 0,
@@ -73,6 +74,7 @@ describe("RunHistory", () => {
       completedAt: Date.now(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      failureCountedAt: null,
       totalRuns: 1,
       startingRuns: 0,
       runningRuns: 0,
@@ -131,6 +133,7 @@ describe("RunHistory", () => {
       completedAt: Date.now(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      failureCountedAt: Date.now(),
       totalRuns: 2,
       startingRuns: 0,
       runningRuns: 0,
@@ -146,5 +149,13 @@ describe("RunHistory", () => {
 
     expect(screen.getByText("Repository is not accessible")).toBeInTheDocument();
     expect(screen.getByText("Skipped by concurrency guard")).toBeInTheDocument();
+    expect(screen.getByText("Parent run")).toBeInTheDocument();
+    expect(screen.getByText("group-1")).toBeInTheDocument();
+    expect(screen.getByText("Targets")).toBeInTheDocument();
+    expect(screen.getByText("acme/api, acme/web")).toBeInTheDocument();
+    expect(screen.getByText("Run run-1, session session-1")).toBeInTheDocument();
+    expect(screen.getByText("Run run-2, no session")).toBeInTheDocument();
+    expect(screen.getByText("Auto-pause signal")).toBeInTheDocument();
+    expect(screen.getByText(/Failure counted toward pause threshold/)).toBeInTheDocument();
   });
 });

@@ -203,6 +203,7 @@ export function toAutomationRunGroup(row: EnrichedRunGroupRow): AutomationRunGro
     completedAt: row.completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    failureCountedAt: row.failure_counted_at,
     totalRuns: row.total_runs,
     startingRuns: row.starting_runs,
     runningRuns: row.running_runs,

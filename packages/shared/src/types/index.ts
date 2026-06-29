@@ -886,6 +886,7 @@ export interface AutomationRunGroup {
   completedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  failureCountedAt: number | null;
   totalRuns: number;
   startingRuns: number;
   runningRuns: number;
