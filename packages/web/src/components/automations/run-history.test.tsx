@@ -90,7 +90,7 @@ describe("RunHistory", () => {
     expect(screen.queryByText("Child run")).not.toBeInTheDocument();
   });
 
-  it("shows child failure and skip reasons when a group is expanded", () => {
+  it("shows repository outcomes without exposing run identifiers when a group is expanded", () => {
     const failedRun: AutomationRun = {
       id: "run-1",
       automationId: "auto-1",
@@ -149,13 +149,15 @@ describe("RunHistory", () => {
 
     expect(screen.getByText("Repository is not accessible")).toBeInTheDocument();
     expect(screen.getByText("Skipped by concurrency guard")).toBeInTheDocument();
-    expect(screen.getByText("Parent run")).toBeInTheDocument();
-    expect(screen.getByText("group-1")).toBeInTheDocument();
-    expect(screen.getByText("Targets")).toBeInTheDocument();
-    expect(screen.getByText("acme/api, acme/web")).toBeInTheDocument();
-    expect(screen.getByText("Run run-1, session session-1")).toBeInTheDocument();
-    expect(screen.getByText("Run run-2, no session")).toBeInTheDocument();
-    expect(screen.getByText("Auto-pause signal")).toBeInTheDocument();
-    expect(screen.getByText(/Failure counted toward pause threshold/)).toBeInTheDocument();
+    expect(screen.getByText("acme/api")).toBeInTheDocument();
+    expect(screen.getByText("acme/web")).toBeInTheDocument();
+    expect(screen.getByText("Session created")).toBeInTheDocument();
+    expect(screen.getByText("No session needed")).toBeInTheDocument();
+    expect(screen.getByText(/Counts toward auto-pause since/)).toBeInTheDocument();
+    expect(screen.queryByText("Parent run")).not.toBeInTheDocument();
+    expect(screen.queryByText("group-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Targets")).not.toBeInTheDocument();
+    expect(screen.queryByText("Run run-1, session session-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Run run-2, no session")).not.toBeInTheDocument();
   });
 });

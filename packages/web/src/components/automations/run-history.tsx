@@ -6,6 +6,7 @@ import type { AutomationRun, AutomationRunGroup } from "@open-inspect/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronRightIcon } from "@/components/ui/icons";
+import { formatRepoLabel } from "@/lib/repo-label";
 
 const STATUS_BADGES = {
   starting: <Badge className="bg-muted text-muted-foreground">Starting</Badge>,
@@ -47,25 +48,14 @@ function formatReason(reason: string): string {
   return reason;
 }
 
-function formatTargets(runs: AutomationRun[]): string {
-  const targets = runs
-    .map((run) =>
-      run.targetRepoOwner && run.targetRepoName
-        ? `${run.targetRepoOwner}/${run.targetRepoName}`
-        : null
-    )
-    .filter((target): target is string => target !== null);
-
-  return targets.length > 0 ? targets.join(", ") : "No repository target recorded";
+function formatTarget(run: AutomationRun): string {
+  return formatRepoLabel(run.targetRepoOwner, run.targetRepoName);
 }
 
-function ReceiptItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[11px] font-medium uppercase text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-words text-xs text-foreground">{value}</dd>
-    </div>
-  );
+function formatSessionState(run: AutomationRun): string {
+  if (run.sessionId) return "Session created";
+  if (run.status === "skipped") return "No session needed";
+  return "No session yet";
 }
 
 interface RunHistoryProps {
@@ -106,16 +96,15 @@ export function RunHistory({
           const hasChildRuns = group.totalRuns > 0;
           const groupSummary = group.failureReason ?? group.skipReason;
           const autoPauseSignal = group.failureCountedAt
-            ? `Failure counted toward pause threshold at ${new Date(
-                group.failureCountedAt
-              ).toLocaleString()}`
+            ? `Counts toward auto-pause since ${new Date(group.failureCountedAt).toLocaleString()}`
             : null;
           return (
             <div key={group.id} className="px-4 py-3">
               <button
                 type="button"
-                className="flex w-full items-center justify-between gap-4 text-left"
+                className="flex w-full flex-col gap-2 text-left sm:flex-row sm:items-start sm:justify-between sm:gap-4"
                 disabled={!hasChildRuns}
+                aria-expanded={hasChildRuns ? expanded : undefined}
                 onClick={() =>
                   setExpandedGroups((prev) => {
                     const next = new Set(prev);
@@ -125,101 +114,115 @@ export function RunHistory({
                   })
                 }
               >
-                <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-start gap-2">
                   {!hasChildRuns ? (
-                    <span className="h-3.5 w-3.5" />
+                    <span className="mt-0.5 h-3.5 w-3.5" />
                   ) : expanded ? (
-                    <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                    <ChevronDownIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
                   ) : (
-                    <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                    <ChevronRightIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
                   )}
-                  {statusBadge(group.status)}
-                  {hasChildRuns ? (
-                    <>
-                      <span className="text-sm text-foreground">
-                        {group.totalRuns} {group.totalRuns === 1 ? "repository" : "repositories"}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {formatRunCounts(group)}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-sm text-muted-foreground">
-                      {groupSummary ? formatReason(groupSummary) : "No repository sessions started"}
-                    </span>
-                  )}
-                  {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {statusBadge(group.status)}
+                      {hasChildRuns ? (
+                        <>
+                          <span className="text-sm font-medium text-foreground">
+                            {group.totalRuns}{" "}
+                            {group.totalRuns === 1 ? "repository" : "repositories"}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatRunCounts(group)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">
+                          {groupSummary
+                            ? formatReason(groupSummary)
+                            : "No repository sessions started"}
+                        </span>
+                      )}
+                      {duration && (
+                        <span className="text-xs text-muted-foreground">{duration}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <span className="flex-shrink-0 text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground sm:flex-shrink-0">
                   {new Date(group.scheduledAt).toLocaleString()}
                 </span>
               </button>
               {expanded && hasChildRuns && (
                 <div className="mt-3 space-y-3 border-t border-border-muted pt-3">
-                  <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-                    <ReceiptItem label="Parent run" value={group.id} />
-                    <ReceiptItem label="Targets" value={formatTargets(group.runs)} />
-                    {group.skipReason && (
-                      <ReceiptItem
-                        label="Overlap decision"
-                        value={formatReason(group.skipReason)}
-                      />
-                    )}
-                    {group.failureReason && (
-                      <ReceiptItem label="Group failure" value={group.failureReason} />
-                    )}
-                    {autoPauseSignal && (
-                      <ReceiptItem label="Auto-pause signal" value={autoPauseSignal} />
-                    )}
-                  </dl>
-                  <div className="space-y-2">
+                  {(group.skipReason || group.failureReason || autoPauseSignal) && (
+                    <div className="space-y-1 text-xs">
+                      {group.failureReason && (
+                        <p className="text-destructive">{group.failureReason}</p>
+                      )}
+                      {!group.failureReason && group.skipReason && (
+                        <p className="text-warning">{formatReason(group.skipReason)}</p>
+                      )}
+                      {autoPauseSignal && (
+                        <p className="text-muted-foreground">{autoPauseSignal}</p>
+                      )}
+                    </div>
+                  )}
+                  <div className="space-y-1">
                     {group.runs.map((run) => {
                       const childDuration = formatDuration(run.startedAt, run.completedAt);
-                      const target =
-                        run.targetRepoOwner && run.targetRepoName
-                          ? `${run.targetRepoOwner}/${run.targetRepoName}`
-                          : (run.sessionTitle ?? "No repository target");
+                      const target = formatTarget(run);
                       return (
-                        <div key={run.id} className="space-y-1">
-                          <div className="flex items-center justify-between gap-3 text-sm">
-                            <div className="flex min-w-0 items-center gap-2">
+                        <div
+                          key={run.id}
+                          className="grid gap-2 rounded-sm px-2 py-2 transition-colors hover:bg-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                               {statusBadge(run.status)}
-                              <span className="truncate text-foreground">{target}</span>
+                              <span className="min-w-0 truncate font-medium text-foreground">
+                                {target}
+                              </span>
                               {childDuration && (
                                 <span className="text-xs text-muted-foreground">
                                   {childDuration}
                                 </span>
                               )}
                             </div>
-                            {run.sessionId && (
-                              <Link
-                                href={`/session/${run.sessionId}`}
-                                className="flex-shrink-0 text-xs text-accent hover:underline"
-                              >
-                                View session
-                              </Link>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                              <span>{formatSessionState(run)}</span>
+                              {run.targetBaseBranch && (
+                                <span>Base branch: {run.targetBaseBranch}</span>
+                              )}
+                              {run.artifactSummary && <span>{run.artifactSummary}</span>}
+                            </div>
+                            {run.failureReason && (
+                              <p className="mt-1 text-xs text-destructive">{run.failureReason}</p>
+                            )}
+                            {!run.failureReason && run.skipReason && (
+                              <p className="mt-1 text-xs text-warning">
+                                {formatReason(run.skipReason)}
+                              </p>
                             )}
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            Run {run.id}
-                            {run.sessionId ? `, session ${run.sessionId}` : ", no session"}
-                          </p>
-                          {run.failureReason && (
-                            <p className="text-xs text-destructive">{run.failureReason}</p>
-                          )}
-                          {!run.failureReason && run.skipReason && (
-                            <p className="text-xs text-warning">{formatReason(run.skipReason)}</p>
-                          )}
+                          {run.sessionId ? (
+                            <Link
+                              href={`/session/${run.sessionId}`}
+                              aria-label={`View session for ${target}`}
+                              className="text-xs text-accent hover:underline sm:mt-0.5"
+                            >
+                              View session
+                            </Link>
+                          ) : null}
                         </div>
                       );
                     })}
                   </div>
                 </div>
               )}
-              {hasChildRuns && group.failureReason && (
+              {hasChildRuns && !expanded && group.failureReason && (
                 <p className="mt-1 text-xs text-destructive">{group.failureReason}</p>
               )}
-              {hasChildRuns && !group.failureReason && group.skipReason && (
+              {hasChildRuns && !expanded && !group.failureReason && group.skipReason && (
                 <p className="mt-1 text-xs text-warning">{formatReason(group.skipReason)}</p>
               )}
             </div>
