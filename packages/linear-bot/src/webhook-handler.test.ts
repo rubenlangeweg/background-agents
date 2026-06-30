@@ -335,6 +335,34 @@ describe("handleAgentSessionEvent auth failures", () => {
     return fetchMock;
   }
 
+  function stubRefreshFailureThenCommentSuccess() {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.linear.app/oauth/token") {
+        return {
+          ok: false,
+          status: 500,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                error: "temporarily_unavailable",
+                error_description: "Linear is temporarily unavailable.",
+              })
+            ),
+        };
+      }
+      if (url === "https://api.linear.app/graphql") {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
+        };
+      }
+      throw new Error(`Unexpected fetch to ${url} with ${String(init?.method)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
   it("posts a reauthorization comment and does not create a session on new-session invalid_grant", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -352,8 +380,12 @@ describe("handleAgentSessionEvent auth failures", () => {
       variables: { input: { issueId: string; body: string } };
     };
     expect(body.variables.input.issueId).toBe("issue-1");
+    expect(body.variables.input.body).toContain(
+      "Open-Inspect could not start this Linear agent session"
+    );
     expect(body.variables.input.body).toContain("could not start this Linear agent session");
     expect(body.variables.input.body).toContain("workspace authorization");
+    expect(body.variables.input.body).toContain("Please re-authorize Open-Inspect");
     expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
     expect(body.variables.input.body).toContain("Trace ID: trace-123");
     await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
@@ -364,6 +396,40 @@ describe("handleAgentSessionEvent auth failures", () => {
         oauthError: "invalid_grant",
         oauthErrorDescription: "Refresh token has expired.",
       },
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        outcome: "sent",
+      },
+    });
+    expect(controlPlaneFetch(env)).not.toHaveBeenCalled();
+  });
+
+  it("uses APP_NAME in transient auth-failure fallback copy", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { kv } = createFakeKV({ "oauth:token:org-1": expiredToken() });
+    const env = makeLinearBotEnv(kv, { APP_NAME: "Acme Agent", LINEAR_API_KEY: "linear-api-key" });
+    const fetchMock = stubRefreshFailureThenCommentSuccess();
+
+    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-234");
+
+    const commentCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "https://api.linear.app/graphql"
+    );
+    expect(commentCall).toBeDefined();
+    const body = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
+      variables: { input: { body: string } };
+    };
+    expect(body.variables.input.body).toContain(
+      "Acme Agent could not start this Linear agent session because Acme Agent could not verify the Linear workspace authorization."
+    );
+    expect(body.variables.input.body).toContain("re-authorize Acme Agent");
+    expect(body.variables.input.body).not.toContain("Open-Inspect");
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "transient_failure",
+      reason: "refresh_failed",
       lastNotification: {
         issueId: "issue-1",
         issueIdentifier: "ORI-229",
@@ -390,7 +456,7 @@ describe("handleAgentSessionEvent auth failures", () => {
         createdAt: Date.now(),
       }),
     });
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    const env = makeLinearBotEnv(kv, { APP_NAME: "Acme Agent", LINEAR_API_KEY: "linear-api-key" });
     const fetchMock = stubInvalidGrantThenCommentSuccess();
 
     await handleAgentSessionEvent(makeWebhook("prompted"), env, "trace-456");
@@ -402,7 +468,9 @@ describe("handleAgentSessionEvent auth failures", () => {
     const body = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
       variables: { input: { body: string } };
     };
-    expect(body.variables.input.body).toContain("could not process this follow-up");
+    expect(body.variables.input.body).toContain("Acme Agent could not process this follow-up");
+    expect(body.variables.input.body).toContain("Please re-authorize Acme Agent");
+    expect(body.variables.input.body).not.toContain("Open-Inspect");
     expect(body.variables.input.body).toContain("https://linear-bot.example.test/oauth/authorize");
     await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
       status: "reauthorization_required",

@@ -223,8 +223,7 @@ app.get("/health", (c) => {
 // ─── OAuth Routes ────────────────────────────────────────────────────────────
 
 app.get("/oauth/authorize", async (c) => {
-  const state = crypto.randomUUID();
-  await storeOAuthState(c.env, state);
+  const state = await storeOAuthState(c.env, crypto.randomUUID());
   return c.redirect(buildOAuthAuthorizeUrl(c.env, state), 302);
 });
 
@@ -285,11 +284,6 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Invalid payload" }, 400);
   }
 
-  if (isWebhookTimestampStale(payload, Date.now())) {
-    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "stale_timestamp" });
-    return c.json({ error: "Stale webhook payload" }, 400);
-  }
-
   const eventType = readStringField(payload, "type") ?? "unknown";
   const action = readStringField(payload, "action") ?? "unknown";
   const deliveryId = c.req.header("linear-delivery") ?? null;
@@ -303,6 +297,15 @@ app.post("/webhook", async (c) => {
         action,
       });
       return c.json({ error: "Invalid payload" }, 400);
+    }
+    if (isWebhookTimestampStale(payload, Date.now())) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "stale_timestamp",
+        type: eventType,
+        action,
+      });
+      return c.json({ error: "Stale webhook payload" }, 400);
     }
     if (!deliveryId) {
       log.warn("webhook.invalid_payload", {

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as WebhookHandler from "./webhook-handler";
-import { getLinearAuthState, setLinearAuthState, storeOAuthState } from "./kv-store";
+import {
+  consumeOAuthState,
+  getLinearAuthState,
+  setLinearAuthState,
+  storeOAuthState,
+} from "./kv-store";
 import {
   createFakeKV,
   makeExecutionContext,
@@ -59,7 +64,7 @@ describe("OAuth routes", () => {
     vi.unstubAllGlobals();
   });
 
-  it("stores OAuth state and includes it in the authorize redirect", async () => {
+  it("includes a signed OAuth state in the authorize redirect", async () => {
     const { kv, store } = createFakeKV();
     const env = makeLinearBotEnv(kv);
 
@@ -73,7 +78,8 @@ describe("OAuth routes", () => {
     expect(url.origin + url.pathname).toBe("https://linear.app/oauth/authorize");
     expect(url.searchParams.get("actor")).toBe("app");
     expect(state).toBeTruthy();
-    expect(store.has(`oauth:state:${state}`)).toBe(true);
+    await expect(consumeOAuthState(env, state ?? "")).resolves.toBe(true);
+    expect([...store.keys()].some((key) => key.startsWith("oauth:state:"))).toBe(false);
   });
 
   it("rejects OAuth callbacks without a stored state", async () => {
@@ -94,7 +100,7 @@ describe("OAuth routes", () => {
   it("stores token and connected auth health after a valid OAuth callback", async () => {
     const { kv, store } = createFakeKV();
     const env = makeLinearBotEnv(kv);
-    await storeOAuthState(env, "state-1");
+    const state = await storeOAuthState(env, "state-1");
     vi.stubGlobal(
       "fetch",
       vi
@@ -125,12 +131,12 @@ describe("OAuth routes", () => {
     );
 
     const res = await app.fetch(
-      new Request("http://localhost/oauth/callback?code=code-1&state=state-1"),
+      new Request(`http://localhost/oauth/callback?code=code-1&state=${encodeURIComponent(state)}`),
       env
     );
 
     expect(res.status).toBe(200);
-    expect(store.has("oauth:state:state-1")).toBe(false);
+    expect([...store.keys()].some((key) => key.startsWith("oauth:state:"))).toBe(false);
     expect(JSON.parse(store.get("oauth:token:org-1") ?? "{}")).toMatchObject({
       access_token: "access-token",
       refresh_token: "refresh-token",
@@ -210,6 +216,23 @@ describe("POST /webhook", () => {
     expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
     expect(mocks.handleAgentSessionEvent).toHaveBeenCalledTimes(2);
     expect(putCalls.map((call) => call.key)).toEqual(["event:delivery-1", "event:delivery-2"]);
+  });
+
+  it("does not reject AgentSessionEvent payloads with stale webhookTimestamp", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+    const ctx = makeExecutionContext();
+    const payload = {
+      ...makeAgentSessionPayload(),
+      webhookTimestamp: Date.now() - 5 * 60 * 1000,
+    };
+
+    const res = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledOnce();
   });
 
   it("rejects malformed AgentSessionEvent payloads before dedupe", async () => {
@@ -371,7 +394,7 @@ describe("POST /webhook", () => {
     await expect(getLinearAuthState(makeLinearBotEnv(kv), "org-1")).resolves.toBeNull();
   });
 
-  it("rejects stale webhook payloads before handling them", async () => {
+  it("rejects stale auth-health webhook payloads before handling them", async () => {
     const { kv } = createFakeKV();
     const ctx = makeExecutionContext();
     const payload = {

@@ -128,11 +128,101 @@ describe("getOAuthTokenResult", () => {
     });
   });
 
+  it.each([
+    {
+      name: "non-object JSON",
+      raw: "null",
+    },
+    {
+      name: "missing access token",
+      raw: JSON.stringify({
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+    },
+    {
+      name: "non-string access token",
+      raw: JSON.stringify({
+        access_token: 123,
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+    },
+    {
+      name: "non-number expiry",
+      raw: JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: String(Date.now() + 10 * 60 * 1000),
+      }),
+    },
+    {
+      name: "non-string refresh token",
+      raw: JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: 123,
+        expires_at: Date.now() + 10 * 60 * 1000,
+      }),
+    },
+  ])("requires reauthorization when the stored token has $name", async ({ raw }) => {
+    const { env } = envWithToken(raw);
+
+    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
+      ok: false,
+      reason: "malformed_token",
+      reauthorizationRequired: true,
+      retryable: false,
+    });
+  });
+
   it("returns a fresh token without refreshing", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "fresh-token",
         refresh_token: "refresh-token",
+        expires_at: Date.now() + 10 * 60 * 1000,
+      })
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
+      ok: true,
+      token: "fresh-token",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a token that expires within the refresh skew", async () => {
+    const { env } = envWithToken(
+      JSON.stringify({
+        access_token: "nearly-expired-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 4 * 60 * 1000,
+      })
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          access_token: "new-access-token",
+          refresh_token: "new-refresh-token",
+          expires_in: 3600,
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
+      ok: true,
+      token: "new-access-token",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns a fresh access token without requiring a refresh token", async () => {
+    const { env } = envWithToken(
+      JSON.stringify({
+        access_token: "fresh-token",
         expires_at: Date.now() + 10 * 60 * 1000,
       })
     );
@@ -415,36 +505,39 @@ describe("getLinearAuthContext", () => {
     });
   });
 
-  it("keeps reauthorization-required health sticky until OAuth callback succeeds", async () => {
-    const { kv } = createFakeKV({
-      "oauth:token:org-1": JSON.stringify({
-        access_token: "fresh-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() + 10 * 60 * 1000,
-      }),
-      "linear_auth:org-1": JSON.stringify({
-        schemaVersion: 1,
-        orgId: "org-1",
-        status: "reauthorization_required",
-        reason: "oauth_app_revoked",
-        updatedAt: Date.now(),
-      }),
-    });
-    const env = makeLinearBotEnv(kv);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+  it.each(["oauth_app_revoked", "permission_team_access_removed"])(
+    "keeps persisted webhook reason %s sticky until OAuth callback succeeds",
+    async (reason) => {
+      const { kv } = createFakeKV({
+        "oauth:token:org-1": JSON.stringify({
+          access_token: "fresh-token",
+          refresh_token: "refresh-token",
+          expires_at: Date.now() + 10 * 60 * 1000,
+        }),
+        "linear_auth:org-1": JSON.stringify({
+          schemaVersion: 1,
+          orgId: "org-1",
+          status: "reauthorization_required",
+          reason,
+          updatedAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getLinearAuthContext(env, "org-1", "trace-sticky")).resolves.toMatchObject({
-      ok: false,
-      reason: "oauth_app_revoked",
-      authStatus: "reauthorization_required",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      status: "reauthorization_required",
-      reason: "oauth_app_revoked",
-    });
-  });
+      await expect(getLinearAuthContext(env, "org-1", "trace-sticky")).resolves.toMatchObject({
+        ok: false,
+        reason,
+        authStatus: "reauthorization_required",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+        status: "reauthorization_required",
+        reason,
+      });
+    }
+  );
 
   it("marks a previously transient workspace connected when a fresh token is usable", async () => {
     const { kv } = createFakeKV({

@@ -66,6 +66,7 @@ export type LinearAuthNotificationFailureReason =
 
 export interface LinearAuthNotificationState {
   fingerprint: string;
+  attemptId?: string;
   issueId?: string;
   issueIdentifier?: string;
   agentSessionId?: string;
@@ -74,6 +75,7 @@ export interface LinearAuthNotificationState {
   failureReason?: LinearAuthNotificationFailureReason;
   traceId?: string;
   attemptedAt: number;
+  leaseExpiresAt?: number;
   completedAt?: number;
   lastSuppressedAt?: number;
   suppressedCount?: number;
@@ -105,11 +107,6 @@ export interface LinearWorkspaceAuthState {
     lastConnectedAt?: number;
   };
   lastNotification?: LinearAuthNotificationState;
-}
-
-export interface OAuthStateRecord {
-  state: string;
-  createdAt: number;
 }
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────

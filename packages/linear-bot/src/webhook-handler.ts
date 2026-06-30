@@ -21,6 +21,7 @@ import {
 } from "./utils/linear-client";
 import type { LinearAuthFailure } from "./utils/linear-client";
 import type { LinearWorkspaceAuthStatus } from "./types";
+import { resolveAppName } from "@open-inspect/shared";
 import { buildInternalAuthHeaders } from "./utils/internal";
 import { splitRepoFullName } from "./utils/repo";
 import { classifyRepo } from "./classifier";
@@ -188,17 +189,18 @@ function formatAgentSessionAuthFailureComment(params: {
   authFailure: AgentSessionAuthFailure;
   traceId: string;
 }): string {
+  const appName = resolveAppName(params.env);
   const action =
     params.mode === "follow_up" ? "process this follow-up" : "start this Linear agent session";
   const reason = params.authFailure.reauthorizationRequired
     ? "the Linear workspace authorization is no longer valid"
-    : "Open-Inspect could not verify the Linear workspace authorization";
+    : `${appName} could not verify the Linear workspace authorization`;
   const nextStep = params.authFailure.reauthorizationRequired
-    ? "Please re-authorize Open-Inspect for this workspace, then retry this request:"
-    : "Please retry this request. If this continues, re-authorize Open-Inspect for this workspace:";
+    ? `Please re-authorize ${appName} for this workspace, then retry this request:`
+    : `Please retry this request. If this continues, re-authorize ${appName} for this workspace:`;
 
   return [
-    `Open-Inspect could not ${action} because ${reason}.`,
+    `${appName} could not ${action} because ${reason}.`,
     "",
     nextStep,
     params.authFailure.reconnectUrl,

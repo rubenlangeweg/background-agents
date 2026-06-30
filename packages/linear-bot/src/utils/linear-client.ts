@@ -19,6 +19,10 @@ const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 const OAUTH_TOKEN_KEY_PREFIX = "oauth:token:";
+const OAUTH_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
+type ParsedStoredTokenData = Pick<StoredTokenData, "access_token" | "expires_at"> &
+  Partial<Pick<StoredTokenData, "refresh_token">>;
 
 // ─── OAuth Helpers ───────────────────────────────────────────────────────────
 
@@ -114,6 +118,34 @@ export interface LinearAuthFailure {
 
 export type OAuthTokenResult = { ok: true; token: string } | LinearAuthFailure;
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStoredTokenData(raw: string): ParsedStoredTokenData | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!isObjectRecord(parsed)) return null;
+
+  const accessToken = parsed.access_token;
+  const refreshToken = parsed.refresh_token;
+  const expiresAt = parsed.expires_at;
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return null;
+  if (refreshToken !== undefined && typeof refreshToken !== "string") return null;
+
+  return {
+    access_token: accessToken,
+    expires_at: expiresAt,
+    ...(refreshToken !== undefined ? { refresh_token: refreshToken } : {}),
+  };
+}
+
 export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAuthTokenResult> {
   const raw = await env.LINEAR_KV.get(getWorkspaceTokenKey(orgId));
   if (!raw) {
@@ -125,10 +157,8 @@ export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAut
     };
   }
 
-  let tokenData: StoredTokenData;
-  try {
-    tokenData = JSON.parse(raw) as StoredTokenData;
-  } catch {
+  const tokenData = parseStoredTokenData(raw);
+  if (!tokenData) {
     return {
       ok: false,
       reason: "malformed_token",
@@ -137,7 +167,7 @@ export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAut
     };
   }
 
-  if (Date.now() < tokenData.expires_at - 5 * 60 * 1000) {
+  if (Date.now() < tokenData.expires_at - OAUTH_TOKEN_REFRESH_SKEW_MS) {
     return { ok: true, token: tokenData.access_token };
   }
 
@@ -250,7 +280,7 @@ function authStatusForFailure(failure: LinearAuthFailure): LinearWorkspaceAuthSt
   return failure.reauthorizationRequired ? "reauthorization_required" : "transient_failure";
 }
 
-function isLinearAuthFailureReason(value: string): value is LinearAuthFailureReason {
+function isLinearAuthFailureReason(value: unknown): value is LinearAuthFailureReason {
   return (
     value === "missing_token" ||
     value === "malformed_token" ||
@@ -261,6 +291,10 @@ function isLinearAuthFailureReason(value: string): value is LinearAuthFailureRea
     value === "oauth_app_revoked" ||
     value === "permission_team_access_removed"
   );
+}
+
+function authFailureReasonForPersistedState(reason: unknown): LinearAuthFailureReason {
+  return isLinearAuthFailureReason(reason) ? reason : "missing_token";
 }
 
 export function getLinearReconnectUrl(env: Env): string {
@@ -276,7 +310,7 @@ export async function getLinearAuthContext(
   if (existing?.status === "reauthorization_required") {
     return {
       ok: false,
-      reason: isLinearAuthFailureReason(existing.reason) ? existing.reason : "missing_token",
+      reason: authFailureReasonForPersistedState(existing.reason),
       reauthorizationRequired: true,
       retryable: false,
       authStatus: "reauthorization_required",
@@ -366,6 +400,7 @@ export async function postAuthFailureCommentFallback(
     await completeLinearAuthNotification(env, {
       orgId: params.orgId,
       fingerprint,
+      attemptId: started.attemptId,
       outcome: "unavailable",
       failureReason: "missing_linear_api_key",
     });
@@ -377,6 +412,7 @@ export async function postAuthFailureCommentFallback(
     await completeLinearAuthNotification(env, {
       orgId: params.orgId,
       fingerprint,
+      attemptId: started.attemptId,
       outcome: result.success ? "sent" : "failed",
       failureReason: result.success ? undefined : "linear_api_rejected",
       httpStatus: result.status,
@@ -386,6 +422,7 @@ export async function postAuthFailureCommentFallback(
     await completeLinearAuthNotification(env, {
       orgId: params.orgId,
       fingerprint,
+      attemptId: started.attemptId,
       outcome: "failed",
       failureReason: "post_exception",
     });
