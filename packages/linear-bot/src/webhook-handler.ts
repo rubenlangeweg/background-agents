@@ -11,13 +11,15 @@ import type {
   AgentSessionWebhookIssue,
 } from "./types";
 import {
-  getLinearClient,
+  getLinearClientResult,
   emitAgentActivity,
   fetchIssueDetails,
   fetchUser,
   updateAgentSession,
   getRepoSuggestions,
+  postIssueComment,
 } from "./utils/linear-client";
+import type { LinearAuthFailure } from "./utils/linear-client";
 import { buildInternalAuthHeaders } from "./utils/internal";
 import { splitRepoFullName } from "./utils/repo";
 import { classifyRepo } from "./classifier";
@@ -173,6 +175,77 @@ async function createSession(
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
 
+type AgentSessionAuthFailureMode = "start" | "follow_up";
+
+function formatAgentSessionAuthFailureComment(params: {
+  env: Env;
+  mode: AgentSessionAuthFailureMode;
+  authFailure: LinearAuthFailure;
+  traceId: string;
+}): string {
+  const action =
+    params.mode === "follow_up" ? "process this follow-up" : "start this Linear agent session";
+  const reason = params.authFailure.reauthorizationRequired
+    ? "the Linear workspace authorization is no longer valid"
+    : "Open-Inspect could not verify the Linear workspace authorization";
+  const nextStep = params.authFailure.reauthorizationRequired
+    ? "Please re-authorize Open-Inspect for this workspace, then retry this request:"
+    : "Please retry this request. If this continues, re-authorize Open-Inspect for this workspace:";
+
+  return [
+    `Open-Inspect could not ${action} because ${reason}.`,
+    "",
+    nextStep,
+    `${params.env.WORKER_URL}/oauth/authorize`,
+    "",
+    `Trace ID: ${params.traceId}`,
+  ].join("\n");
+}
+
+async function notifyAgentSessionAuthFailure(params: {
+  env: Env;
+  traceId: string;
+  orgId: string;
+  agentSessionId: string;
+  issue: AgentSessionWebhookIssue;
+  mode: AgentSessionAuthFailureMode;
+  authFailure: LinearAuthFailure;
+}): Promise<void> {
+  const { env, traceId, orgId, agentSessionId, issue, mode, authFailure } = params;
+
+  if (!env.LINEAR_API_KEY) {
+    log.warn("agent_session.auth_failure_notification_unavailable", {
+      trace_id: traceId,
+      org_id: orgId,
+      agent_session_id: agentSessionId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      auth_failure_reason: authFailure.reason,
+      reauthorization_required: authFailure.reauthorizationRequired,
+      message: "LINEAR_API_KEY not configured, cannot post fallback comment",
+    });
+    return;
+  }
+
+  const result = await postIssueComment(
+    env.LINEAR_API_KEY,
+    issue.id,
+    formatAgentSessionAuthFailureComment({ env, mode, authFailure, traceId })
+  );
+
+  log.info("agent_session.auth_failure_notified", {
+    trace_id: traceId,
+    org_id: orgId,
+    agent_session_id: agentSessionId,
+    issue_id: issue.id,
+    issue_identifier: issue.identifier,
+    auth_failure_reason: authFailure.reason,
+    reauthorization_required: authFailure.reauthorizationRequired,
+    delivery: "comment_fallback",
+    delivery_outcome: result.success ? "success" : "error",
+  });
+}
+
 async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
@@ -225,15 +298,27 @@ async function handleFollowUp(
   const agentActivity = webhook.agentActivity;
   const orgId = webhook.organizationId;
 
-  const client = await getLinearClient(env, orgId);
-  if (!client) {
+  const clientResult = await getLinearClientResult(env, orgId);
+  if (!clientResult.ok) {
     log.error("agent_session.no_oauth_token", {
       trace_id: traceId,
       org_id: orgId,
       agent_session_id: agentSessionId,
+      auth_failure_reason: clientResult.reason,
+      reauthorization_required: clientResult.reauthorizationRequired,
+    });
+    await notifyAgentSessionAuthFailure({
+      env,
+      traceId,
+      orgId,
+      agentSessionId,
+      issue,
+      mode: "follow_up",
+      authFailure: clientResult,
     });
     return;
   }
+  const client = clientResult.client;
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
@@ -328,15 +413,27 @@ async function handleNewSession(
   const comment = webhook.agentSession.comment;
   const orgId = webhook.organizationId;
 
-  const client = await getLinearClient(env, orgId);
-  if (!client) {
+  const clientResult = await getLinearClientResult(env, orgId);
+  if (!clientResult.ok) {
     log.error("agent_session.no_oauth_token", {
       trace_id: traceId,
       org_id: orgId,
       agent_session_id: agentSessionId,
+      auth_failure_reason: clientResult.reason,
+      reauthorization_required: clientResult.reauthorizationRequired,
+    });
+    await notifyAgentSessionAuthFailure({
+      env,
+      traceId,
+      orgId,
+      agentSessionId,
+      issue,
+      mode: "start",
+      authFailure: clientResult,
     });
     return;
   }
+  const client = clientResult.client;
 
   await updateAgentSession(client, agentSessionId, { plan: makePlan("start") });
   await emitAgentActivity(

@@ -63,21 +63,65 @@ export async function exchangeCodeForToken(
 }
 
 export async function getOAuthToken(env: Env, orgId: string): Promise<string | null> {
+  const result = await getOAuthTokenResult(env, orgId);
+  return result.ok ? result.token : null;
+}
+
+export type LinearAuthFailureReason =
+  | "missing_token"
+  | "malformed_token"
+  | "missing_refresh_token"
+  | "refresh_invalid_grant"
+  | "refresh_failed"
+  | "refresh_error";
+
+export interface LinearAuthFailure {
+  ok: false;
+  reason: LinearAuthFailureReason;
+  reauthorizationRequired: boolean;
+  retryable: boolean;
+  status?: number;
+  oauthError?: string;
+  oauthErrorDescription?: string;
+}
+
+export type OAuthTokenResult = { ok: true; token: string } | LinearAuthFailure;
+
+export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAuthTokenResult> {
   const raw = await env.LINEAR_KV.get(getWorkspaceTokenKey(orgId));
-  if (!raw) return null;
+  if (!raw) {
+    return {
+      ok: false,
+      reason: "missing_token",
+      reauthorizationRequired: true,
+      retryable: false,
+    };
+  }
 
   let tokenData: StoredTokenData;
   try {
     tokenData = JSON.parse(raw) as StoredTokenData;
   } catch {
-    return null;
+    return {
+      ok: false,
+      reason: "malformed_token",
+      reauthorizationRequired: true,
+      retryable: false,
+    };
   }
 
   if (Date.now() < tokenData.expires_at - 5 * 60 * 1000) {
-    return tokenData.access_token;
+    return { ok: true, token: tokenData.access_token };
   }
 
-  if (!tokenData.refresh_token) return null;
+  if (!tokenData.refresh_token) {
+    return {
+      ok: false,
+      reason: "missing_refresh_token",
+      reauthorizationRequired: true,
+      retryable: false,
+    };
+  }
 
   try {
     log.info("oauth.refresh", { org_id: orgId });
@@ -116,7 +160,15 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
         oauth_error_description: oauthErrorDescription,
         body_snippet: oauthError ? undefined : rawBody.slice(0, 500),
       });
-      return null;
+      return {
+        ok: false,
+        reason: oauthError === "invalid_grant" ? "refresh_invalid_grant" : "refresh_failed",
+        reauthorizationRequired: oauthError === "invalid_grant",
+        retryable: oauthError !== "invalid_grant",
+        status: res.status,
+        oauthError,
+        oauthErrorDescription,
+      };
     }
 
     const refreshed = (await res.json()) as OAuthTokenResponse;
@@ -126,13 +178,18 @@ export async function getOAuthToken(env: Env, orgId: string): Promise<string | n
       expires_at: Date.now() + refreshed.expires_in * 1000,
     };
     await env.LINEAR_KV.put(getWorkspaceTokenKey(orgId), JSON.stringify(newStored));
-    return newStored.access_token;
+    return { ok: true, token: newStored.access_token };
   } catch (err) {
     log.error("oauth.refresh_error", {
       org_id: orgId,
       error: err instanceof Error ? err : new Error(String(err)),
     });
-    return null;
+    return {
+      ok: false,
+      reason: "refresh_error",
+      reauthorizationRequired: false,
+      retryable: true,
+    };
   }
 }
 
@@ -143,9 +200,16 @@ export interface LinearApiClient {
 }
 
 export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
-  const token = await getOAuthToken(env, orgId);
-  if (!token) return null;
-  return { accessToken: token };
+  const result = await getLinearClientResult(env, orgId);
+  return result.ok ? result.client : null;
+}
+
+export type LinearClientResult = { ok: true; client: LinearApiClient } | LinearAuthFailure;
+
+export async function getLinearClientResult(env: Env, orgId: string): Promise<LinearClientResult> {
+  const result = await getOAuthTokenResult(env, orgId);
+  if (!result.ok) return result;
+  return { ok: true, client: { accessToken: result.token } };
 }
 
 /**
