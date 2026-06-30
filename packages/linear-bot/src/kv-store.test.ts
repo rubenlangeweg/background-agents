@@ -8,6 +8,8 @@ import {
   storeIssueSession,
   isDuplicateEvent,
   DEFAULT_TRIGGER_CONFIG,
+  LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS,
+  OAUTH_STATE_TTL_MS,
   beginLinearAuthNotification,
   buildLinearAuthNotificationFingerprint,
   completeLinearAuthNotification,
@@ -285,7 +287,7 @@ describe("linear auth health", () => {
         attemptId: started.attemptId,
         outcome: "attempting",
         attemptedAt: now,
-        leaseExpiresAt: now + 5 * 60 * 1000,
+        leaseExpiresAt: now + LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS,
       },
     });
     nowSpy.mockRestore();
@@ -377,7 +379,7 @@ describe("linear auth health", () => {
       fingerprint,
       issueId: "issue-1",
     });
-    nowSpy.mockReturnValue(1_000 + 5 * 60 * 1000 + 1);
+    nowSpy.mockReturnValue(1_000 + LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS + 1);
 
     const second = await beginLinearAuthNotification(env, {
       orgId: "org-1",
@@ -393,7 +395,7 @@ describe("linear auth health", () => {
         fingerprint,
         attemptId: second.attemptId,
         outcome: "attempting",
-        attemptedAt: 1_000 + 5 * 60 * 1000 + 1,
+        attemptedAt: 1_000 + LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS + 1,
       },
     });
     nowSpy.mockRestore();
@@ -415,7 +417,7 @@ describe("linear auth health", () => {
       issueId: "issue-1",
     });
     const attemptId = requireAttemptId(started);
-    nowSpy.mockReturnValue(1_000 + 5 * 60 * 1000 + 1);
+    nowSpy.mockReturnValue(1_000 + LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS + 1);
 
     await completeLinearAuthNotification(env, {
       orgId: "org-1",
@@ -588,7 +590,7 @@ describe("oauth state", () => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);
     const state = await storeOAuthState(env, "state-1");
-    nowSpy.mockReturnValue(1_000 + 10 * 60 * 1000 + 1);
+    nowSpy.mockReturnValue(1_000 + OAUTH_STATE_TTL_MS + 1);
 
     await expect(consumeOAuthState(env, state)).resolves.toBe(false);
     nowSpy.mockRestore();

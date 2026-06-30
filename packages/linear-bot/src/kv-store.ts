@@ -24,10 +24,10 @@ const LINEAR_AUTH_KEY_PREFIX = "linear_auth:";
 const SECOND_MS = 1000;
 const ISSUE_SESSION_TTL_MS = 7 * 24 * 60 * 60 * SECOND_MS;
 const EVENT_DEDUP_TTL_MS = 60 * 60 * SECOND_MS;
-const OAUTH_STATE_TTL_MS = 10 * 60 * SECOND_MS;
+export const OAUTH_STATE_TTL_MS = 10 * 60 * SECOND_MS;
 const OAUTH_STATE_SCOPE = "linear_oauth_state";
 const OAUTH_STATE_TOKEN_PREFIX = "linear_oauth_state_v1";
-const LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS = 5 * 60 * SECOND_MS;
+export const LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS = 5 * 60 * SECOND_MS;
 
 export const DEFAULT_TRIGGER_CONFIG: TriggerConfig = {
   triggerLabel: "agent",
