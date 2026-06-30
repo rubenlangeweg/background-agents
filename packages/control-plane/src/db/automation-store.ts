@@ -158,6 +158,28 @@ export function toAutomation(
   };
 }
 
+function assertAutomationRepositoryFields(row: Partial<AutomationRow>): void {
+  const repoOwnerProvided = "repo_owner" in row;
+  const repoNameProvided = "repo_name" in row;
+
+  if (repoOwnerProvided !== repoNameProvided) {
+    throw new Error("Automation repository target must include repo_owner and repo_name together");
+  }
+
+  if (!repoOwnerProvided || !repoNameProvided) return;
+
+  const repoOwner = row.repo_owner ?? null;
+  const repoName = row.repo_name ?? null;
+
+  if ((repoOwner === null) !== (repoName === null)) {
+    throw new Error("Automation repository target must include repo_owner and repo_name together");
+  }
+
+  if (repoOwner === null && (row.base_branch != null || row.repo_id != null)) {
+    throw new Error("Automation base_branch and repo_id require repository context");
+  }
+}
+
 export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
   return {
     id: row.id,
@@ -226,6 +248,8 @@ export class AutomationStore {
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
   bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
+    assertAutomationRepositoryFields(row);
+
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -401,6 +425,8 @@ export class AutomationStore {
    * with `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
   bindAutomationUpdate(id: string, fields: Partial<AutomationRow>): D1PreparedStatement | null {
+    assertAutomationRepositoryFields(fields);
+
     const setClauses: string[] = [];
     const params: unknown[] = [];
 

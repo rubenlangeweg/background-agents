@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS automations_new (
   trigger_config  TEXT,
   trigger_auth_data TEXT,
   user_id         TEXT,
-  CHECK ((repo_owner IS NULL) = (repo_name IS NULL))
+  CHECK ((repo_owner IS NULL) = (repo_name IS NULL)),
+  CHECK (repo_owner IS NOT NULL OR base_branch IS NULL),
+  CHECK (repo_owner IS NOT NULL OR repo_id IS NULL)
 );
 
 CREATE TABLE IF NOT EXISTS automations (
@@ -105,7 +107,10 @@ CREATE TABLE IF NOT EXISTS automations (
   event_type      TEXT,
   trigger_config  TEXT,
   trigger_auth_data TEXT,
-  user_id         TEXT
+  user_id         TEXT,
+  CHECK ((repo_owner IS NULL) = (repo_name IS NULL)),
+  CHECK (repo_owner IS NOT NULL OR base_branch IS NULL),
+  CHECK (repo_owner IS NOT NULL OR repo_id IS NULL)
 );
 
 INSERT OR REPLACE INTO automations_new (

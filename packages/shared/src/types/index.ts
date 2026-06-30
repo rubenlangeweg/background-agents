@@ -579,6 +579,21 @@ function validateSessionRepoPair(
   }
 }
 
+function validateSessionRepositoryContext(
+  value: { repoOwner?: string | null; repoName?: string | null; branch?: string | null },
+  ctx: z.RefinementCtx
+): void {
+  validateSessionRepoPair(value, ctx);
+
+  if (!hasRepositoryIdentifier(value.repoOwner) && value.branch?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      message: "branch requires repoOwner and repoName",
+      path: ["branch"],
+    });
+  }
+}
+
 const createSessionRequestBaseSchema = z.object({
   repoOwner: z.string().nullish(),
   repoName: z.string().nullish(),
@@ -588,8 +603,9 @@ const createSessionRequestBaseSchema = z.object({
   branch: z.string().optional(),
 });
 
-export const createSessionRequestSchema =
-  createSessionRequestBaseSchema.superRefine(validateSessionRepoPair);
+export const createSessionRequestSchema = createSessionRequestBaseSchema.superRefine(
+  validateSessionRepositoryContext
+);
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
@@ -615,7 +631,7 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     scmRefreshToken: z.string().optional(),
     scmTokenExpiresAt: z.number().optional(),
   })
-  .superRefine(validateSessionRepoPair);
+  .superRefine(validateSessionRepositoryContext);
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
@@ -653,8 +669,8 @@ export interface SpawnChildSessionRequest {
 
 /** Returned by parent DO's GET /internal/spawn-context */
 export interface SpawnContext {
-  repoOwner: string;
-  repoName: string;
+  repoOwner: string | null;
+  repoName: string | null;
   repoId: number | null;
   model: string;
   reasoningEffort: string | null;
