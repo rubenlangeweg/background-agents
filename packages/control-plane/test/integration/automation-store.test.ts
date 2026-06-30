@@ -85,6 +85,67 @@ function makeRunGroup(
 describe("AutomationStore (D1 integration)", () => {
   beforeEach(cleanD1Tables);
 
+  it("enforces automation repository target invariants in D1", async () => {
+    const schema = await env.DB.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automations'"
+    ).first<{ sql: string }>();
+
+    expect(schema?.sql).toContain("CHECK ((repo_owner IS NULL) = (repo_name IS NULL))");
+    expect(schema?.sql).toContain("CHECK (repo_owner IS NOT NULL OR base_branch IS NULL)");
+    expect(schema?.sql).toContain("CHECK (repo_owner IS NOT NULL OR repo_id IS NULL)");
+
+    const now = Date.now();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO automations (
+          id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+          trigger_type, schedule_tz, model, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "auto-invalid-no-repo-branch",
+          "Invalid no-repo branch",
+          null,
+          null,
+          "main",
+          null,
+          "Run tests",
+          "schedule",
+          "UTC",
+          "anthropic/claude-sonnet-4-6",
+          "user-1",
+          now,
+          now
+        )
+        .run()
+    ).rejects.toThrow();
+
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO automations (
+          id, name, repo_owner, repo_name, base_branch, repo_id, instructions,
+          trigger_type, schedule_tz, model, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "auto-invalid-partial-repo",
+          "Invalid partial repo",
+          "acme",
+          null,
+          "main",
+          12345,
+          "Run tests",
+          "schedule",
+          "UTC",
+          "anthropic/claude-sonnet-4-6",
+          "user-1",
+          now,
+          now
+        )
+        .run()
+    ).rejects.toThrow();
+  });
+
   // ─── CRUD ─────────────────────────────────────────────────────────────────
 
   describe("CRUD", () => {
