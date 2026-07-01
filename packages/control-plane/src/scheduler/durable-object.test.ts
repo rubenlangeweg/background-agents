@@ -31,7 +31,7 @@ vi.mock("../source-control", () => ({
 }));
 
 // Must import AFTER vi.mock so the hoisted mock is in place
-const { SchedulerDO } = await import("./durable-object");
+const { SchedulerDO, SLACK_THREAD_CONTINUITY_WINDOW_MS } = await import("./durable-object");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -2045,17 +2045,15 @@ describe("SchedulerDO", () => {
       const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
-      // The continuity lookup is scoped to the thread's concurrency key and a
-      // 7-day window measured from now.
+      // The continuity lookup is scoped to the thread's concurrency key.
       expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
         "auto-slack",
         "slack:C1:thread-root",
         expect.any(Number)
       );
       const sinceMs = mockStore.getLatestSteerableRunForThread.mock.calls[0]?.[2] as number;
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - sevenDaysMs - 1000);
-      expect(sinceMs).toBeLessThanOrEqual(Date.now() - sevenDaysMs + 1000);
+      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - SLACK_THREAD_CONTINUITY_WINDOW_MS - 1000);
+      expect(sinceMs).toBeLessThanOrEqual(Date.now() - SLACK_THREAD_CONTINUITY_WINDOW_MS + 1000);
 
       // The follow-up was enqueued onto the existing session as a slack-sourced
       // turn, so its reply posts back in-thread via /callbacks/complete.

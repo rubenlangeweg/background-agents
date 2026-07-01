@@ -564,10 +564,13 @@ function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function validateSessionRepoPair(
-  value: { repoOwner?: string | null; repoName?: string | null },
-  ctx: z.RefinementCtx
-): void {
+interface CreateSessionRepositoryFields {
+  repoOwner?: string | null;
+  repoName?: string | null;
+  branch?: string | null;
+}
+
+function validateSessionRepoPair(value: CreateSessionRepositoryFields, ctx: z.RefinementCtx): void {
   const repoOwnerMissing = !hasRepositoryIdentifier(value.repoOwner);
   const repoNameMissing = !hasRepositoryIdentifier(value.repoName);
   if (repoOwnerMissing !== repoNameMissing) {
@@ -580,7 +583,7 @@ function validateSessionRepoPair(
 }
 
 function validateSessionRepositoryContext(
-  value: { repoOwner?: string | null; repoName?: string | null; branch?: string | null },
+  value: CreateSessionRepositoryFields,
   ctx: z.RefinementCtx
 ): void {
   validateSessionRepoPair(value, ctx);

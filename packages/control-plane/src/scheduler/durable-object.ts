@@ -76,7 +76,7 @@ const RECOVERY_SWEEP_LIMIT = 50;
  * does not create new runs, so this is measured from the root run's `created_at` and
  * does not slide — a reply after the window forks a fresh run.
  */
-const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatAutomationTargetLabel(
   automation: Pick<AutomationRow, "repo_owner" | "repo_name"> | null | undefined

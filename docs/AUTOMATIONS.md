@@ -324,8 +324,9 @@ runs: if a run is already active, the trigger is rejected.
 ### Edit
 
 You can change an automation's name, branch, model, and instructions at any time. For scheduled
-automations, you can also change the schedule and timezone. The repository cannot be changed after
-creation.
+automations, you can also change the schedule and timezone. Target configuration follows the
+repository context rules above: it can be edited while the automation is idle, with cardinality
+changes rejected while a run or run group is active.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
 

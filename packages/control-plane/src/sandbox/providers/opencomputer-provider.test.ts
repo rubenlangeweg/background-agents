@@ -152,7 +152,8 @@ describe("OpenComputerSandboxProvider", () => {
       name: expect.stringMatching(/^openinspect-session-1-[0-9a-f]{8}$/),
       egressAllowlist: ["*"],
     });
-    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 600);
+    expect(createCall).not.toHaveProperty("timeoutSeconds");
+    expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.setSecret).toHaveBeenCalledWith({
       storeId: "secret-store-1",
       name: "ANTHROPIC_API_KEY",
@@ -169,7 +170,24 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
-  it("normalizes runtime env and labels for no-repository sandboxes", async () => {
+  it("applies an explicit timeout when creating a sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      timeoutSeconds: 120,
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.timeoutSeconds).toBe(120);
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 120);
+  });
+
+  it("serializes repo-less sandboxes without nullable repo env or labels", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
@@ -180,6 +198,7 @@ describe("OpenComputerSandboxProvider", () => {
       ...baseConfig,
       repoOwner: null,
       repoName: null,
+      branch: null,
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -199,6 +218,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
       repo_owner: null,
       repo_name: null,
+      branch: null,
     });
   });
 
@@ -326,7 +346,9 @@ describe("OpenComputerSandboxProvider", () => {
         }),
       })
     );
-    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
+    const forkCall = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0];
+    expect(forkCall).not.toHaveProperty("timeoutSeconds");
+    expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
   });
 
@@ -352,11 +374,31 @@ describe("OpenComputerSandboxProvider", () => {
         }),
       })
     );
-    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 600);
+    const forkCall = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0];
+    expect(forkCall).not.toHaveProperty("timeoutSeconds");
+    expect(client.setSandboxTimeout).not.toHaveBeenCalled();
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
   });
 
-  it("normalizes runtime env and labels when restoring no-repository sandboxes", async () => {
+  it("applies an explicit timeout when restoring from a snapshot", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.restoreFromSnapshot({
+      ...baseConfig,
+      snapshotImageId: "checkpoint-session-1",
+      timeoutSeconds: 120,
+    });
+
+    const forkCall = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0];
+    expect(forkCall.timeoutSeconds).toBe(120);
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-fork-1", 120);
+  });
+
+  it("serializes repo-less snapshot restores without nullable repo env or labels", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
@@ -367,6 +409,7 @@ describe("OpenComputerSandboxProvider", () => {
       ...baseConfig,
       repoOwner: null,
       repoName: null,
+      branch: null,
       snapshotImageId: "checkpoint-session-1",
     });
 
@@ -388,6 +431,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(JSON.parse(forkCall.env!.SESSION_CONFIG)).toMatchObject({
       repo_owner: null,
       repo_name: null,
+      branch: null,
     });
   });
 
@@ -517,7 +561,27 @@ describe("OpenComputerSandboxProvider", () => {
     expect(result).toMatchObject({ success: true, providerObjectId: "oc-sandbox-1" });
     expect(client.getSandbox).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.wakeSandbox).toHaveBeenCalledWith("oc-sandbox-1");
-    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 600);
+    expect(client.setSandboxTimeout).not.toHaveBeenCalled();
+    expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
+  });
+
+  it("applies an explicit timeout when waking a hibernated sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.resumeSandbox({
+      providerObjectId: "oc-sandbox-1",
+      sessionId: "session-1",
+      sandboxId: "sandbox-acme-repo-1",
+      codeServerEnabled: false,
+      timeoutSeconds: 120,
+    });
+
+    expect(client.wakeSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 120);
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
   });
 
