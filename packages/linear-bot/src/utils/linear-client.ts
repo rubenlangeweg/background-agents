@@ -91,15 +91,6 @@ export async function exchangeCodeForToken(
   return { orgId: workspaceInfo.id, orgName: workspaceInfo.name };
 }
 
-export async function getOAuthToken(env: Env, orgId: string): Promise<string | null> {
-  try {
-    return await getOAuthTokenOrThrow(env, orgId);
-  } catch (err) {
-    if (err instanceof LinearAuthError) return null;
-    throw err;
-  }
-}
-
 export type LinearAuthFailureReason =
   | "missing_token"
   | "malformed_token"
@@ -310,15 +301,6 @@ export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAut
 
 export interface LinearApiClient {
   accessToken: string;
-}
-
-export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
-  try {
-    return await getLinearClientOrThrow(env, orgId);
-  } catch (err) {
-    if (err instanceof LinearAuthError) return null;
-    throw err;
-  }
 }
 
 export async function getLinearClientOrThrow(env: Env, orgId: string): Promise<LinearApiClient> {

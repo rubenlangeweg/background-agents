@@ -49,18 +49,19 @@ function formatCompletionAuthFailureComment(params: {
   authFailure: CompletionAuthFailure;
   traceId?: string;
 }): string {
+  const appName = params.appName;
   const reason = params.authFailure.reauthorizationRequired
     ? "the Linear workspace authorization is no longer valid"
-    : "Open-Inspect could not verify the Linear workspace authorization";
+    : `${appName} could not verify the Linear workspace authorization`;
   const nextStep = params.authFailure.reauthorizationRequired
-    ? "Please re-authorize Open-Inspect for this workspace:"
-    : "Please retry if this was a temporary Linear auth failure. If it continues, re-authorize Open-Inspect for this workspace:";
+    ? `Please re-authorize ${appName} for this workspace:`
+    : `Please retry if this was a temporary Linear auth failure. If it continues, re-authorize ${appName} for this workspace:`;
 
   return [
-    formatCompletionComment(params.appName, params.success, params.message),
+    formatCompletionComment(appName, params.success, params.message),
     "",
     "---",
-    `Open-Inspect could not update the Linear agent session because ${reason}.`,
+    `${appName} could not update the Linear agent session because ${reason}.`,
     "",
     nextStep,
     params.authFailure.reconnectUrl,

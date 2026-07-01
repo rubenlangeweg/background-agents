@@ -644,6 +644,40 @@ describe("postAuthFailureCommentFallback", () => {
       },
     });
   });
+
+  it("records fallback comment exceptions as failed notifications", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
+    await getLinearAuthContext(env, "org-1", "trace-1");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network unavailable")));
+
+    await expect(
+      postAuthFailureCommentFallback(env, {
+        orgId: "org-1",
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        traceId: "trace-1",
+        status: "reauthorization_required",
+        reason: "missing_token",
+        body: "Reconnect Open-Inspect.",
+      })
+    ).resolves.toEqual({ outcome: "failed", success: false });
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      lastNotification: {
+        issueId: "issue-1",
+        issueIdentifier: "ORI-229",
+        agentSessionId: "agent-session-1",
+        outcome: "failed",
+        failureReason: "post_exception",
+      },
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("linear.auth_failure_comment_fallback_exception")
+    );
+    errorSpy.mockRestore();
+  });
 });
 
 describe("exchangeCodeForToken", () => {

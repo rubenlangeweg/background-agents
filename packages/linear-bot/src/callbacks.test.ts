@@ -127,6 +127,7 @@ describe("callbacksRouter auth health", () => {
       throw new Error(`Unexpected control-plane fetch to ${url}`);
     });
     const env = makeLinearBotEnv(kv, {
+      APP_NAME: "Acme Agent",
       CONTROL_PLANE: { fetch: controlPlaneFetch } as unknown as Fetcher,
       INTERNAL_CALLBACK_SECRET: "callback-secret",
       LINEAR_API_KEY: "linear-api-key",
@@ -206,11 +207,16 @@ describe("callbacksRouter auth health", () => {
     const commentBody = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
       variables: { input: { body: string } };
     };
+    expect(commentBody.variables.input.body).toContain("Acme Agent completed");
     expect(commentBody.variables.input.body).toContain(
-      "Please re-authorize Open-Inspect for this workspace"
+      "Acme Agent could not update the Linear agent session"
+    );
+    expect(commentBody.variables.input.body).toContain(
+      "Please re-authorize Acme Agent for this workspace"
     );
     expect(commentBody.variables.input.body).toContain(
       "https://linear-bot.example.test/oauth/authorize"
     );
+    expect(commentBody.variables.input.body).not.toContain("Open-Inspect");
   });
 });
