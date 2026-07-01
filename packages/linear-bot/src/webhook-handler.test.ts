@@ -256,8 +256,6 @@ describe("handleAgentSessionEvent auth failures", () => {
         issue_identifier: "ORI-229",
         mode: "start",
         auth_failure_reason: "refresh_invalid_grant",
-        reauthorization_required: true,
-        retryable: false,
       })
     );
   });
@@ -297,8 +295,6 @@ describe("handleAgentSessionEvent auth failures", () => {
         issue_identifier: "ORI-229",
         mode: "follow_up",
         auth_failure_reason: "refresh_invalid_grant",
-        reauthorization_required: true,
-        retryable: false,
       })
     );
   });

@@ -175,15 +175,13 @@ async function createSession(
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
 
-type AgentSessionAuthFailureMode = "start" | "follow_up";
-
 async function getAgentSessionLinearClient(params: {
   env: Env;
   traceId: string;
   orgId: string;
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
-  mode: AgentSessionAuthFailureMode;
+  mode: "start" | "follow_up";
 }): Promise<LinearApiClient | null> {
   const { env, traceId, orgId, agentSessionId, issue, mode } = params;
 
@@ -200,8 +198,6 @@ async function getAgentSessionLinearClient(params: {
       issue_identifier: issue.identifier,
       mode,
       auth_failure_reason: err.reason,
-      reauthorization_required: err.reauthorizationRequired,
-      retryable: err.retryable,
     });
     return null;
   }

@@ -83,8 +83,6 @@ export type LinearAuthFailureReason =
 
 export interface LinearAuthFailure {
   reason: LinearAuthFailureReason;
-  reauthorizationRequired: boolean;
-  retryable: boolean;
   status?: number;
   oauthError?: string;
   oauthErrorDescription?: string;
@@ -92,8 +90,6 @@ export interface LinearAuthFailure {
 
 export class LinearAuthError extends Error implements LinearAuthFailure {
   readonly reason: LinearAuthFailureReason;
-  readonly reauthorizationRequired: boolean;
-  readonly retryable: boolean;
   readonly status?: number;
   readonly oauthError?: string;
   readonly oauthErrorDescription?: string;
@@ -102,8 +98,6 @@ export class LinearAuthError extends Error implements LinearAuthFailure {
     super(`Linear auth failed: ${failure.reason}`);
     this.name = "LinearAuthError";
     this.reason = failure.reason;
-    this.reauthorizationRequired = failure.reauthorizationRequired;
-    this.retryable = failure.retryable;
     this.status = failure.status;
     this.oauthError = failure.oauthError;
     this.oauthErrorDescription = failure.oauthErrorDescription;
@@ -152,16 +146,12 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
     });
     throw new LinearAuthError({
       reason: "token_read_error",
-      reauthorizationRequired: false,
-      retryable: true,
     });
   }
 
   if (!raw) {
     throw new LinearAuthError({
       reason: "missing_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   }
 
@@ -169,8 +159,6 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
   if (!tokenData) {
     throw new LinearAuthError({
       reason: "malformed_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   }
 
@@ -181,8 +169,6 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
   if (!tokenData.refresh_token) {
     throw new LinearAuthError({
       reason: "missing_refresh_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   }
 
@@ -225,8 +211,6 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
       });
       throw new LinearAuthError({
         reason: oauthError === "invalid_grant" ? "refresh_invalid_grant" : "refresh_failed",
-        reauthorizationRequired: oauthError === "invalid_grant",
-        retryable: oauthError !== "invalid_grant",
         status: res.status,
         oauthError,
         oauthErrorDescription,
@@ -250,8 +234,6 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
     });
     throw new LinearAuthError({
       reason: "refresh_error",
-      reauthorizationRequired: false,
-      retryable: true,
     });
   }
 }

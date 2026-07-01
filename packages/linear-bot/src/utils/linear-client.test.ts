@@ -108,27 +108,23 @@ describe("getOAuthTokenOrThrow", () => {
     });
   }
 
-  it("requires reauthorization when the workspace token is missing", async () => {
+  it("throws an auth error when the workspace token is missing", async () => {
     const { env } = envWithToken();
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "missing_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("requires reauthorization when the workspace token is malformed", async () => {
+  it("throws an auth error when the workspace token is malformed", async () => {
     const { env } = envWithToken("{not-json");
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "malformed_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("requires reauthorization when the workspace token shape is invalid", async () => {
+  it("throws an auth error when the workspace token shape is invalid", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         refresh_token: "refresh-token",
@@ -138,20 +134,16 @@ describe("getOAuthTokenOrThrow", () => {
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "malformed_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("marks token read exceptions as retryable errors", async () => {
+  it("throws an auth error when the token read fails", async () => {
     const { env } = envWithToken();
     const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
     kvGet.mockRejectedValueOnce(new Error("kv down"));
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "token_read_error",
-      reauthorizationRequired: false,
-      retryable: true,
     });
   });
 
@@ -170,7 +162,7 @@ describe("getOAuthTokenOrThrow", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("requires reauthorization when an expired token has no refresh token", async () => {
+  it("throws an auth error when an expired token has no refresh token", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
@@ -180,12 +172,10 @@ describe("getOAuthTokenOrThrow", () => {
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "missing_refresh_token",
-      reauthorizationRequired: true,
-      retryable: false,
     });
   });
 
-  it("marks invalid_grant refresh failures as reauthorization-required", async () => {
+  it("classifies invalid_grant refresh failures", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
@@ -210,15 +200,13 @@ describe("getOAuthTokenOrThrow", () => {
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_invalid_grant",
-      reauthorizationRequired: true,
-      retryable: false,
       status: 400,
       oauthError: "invalid_grant",
       oauthErrorDescription: "Refresh token has expired.",
     });
   });
 
-  it("marks other refresh HTTP failures as retryable", async () => {
+  it("classifies other refresh HTTP failures", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
@@ -237,13 +225,11 @@ describe("getOAuthTokenOrThrow", () => {
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_failed",
-      reauthorizationRequired: false,
-      retryable: true,
       status: 503,
     });
   });
 
-  it("marks refresh exceptions as retryable errors", async () => {
+  it("classifies refresh exceptions", async () => {
     const { env } = envWithToken(
       JSON.stringify({
         access_token: "expired-token",
@@ -255,8 +241,6 @@ describe("getOAuthTokenOrThrow", () => {
 
     await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "refresh_error",
-      reauthorizationRequired: false,
-      retryable: true,
     });
   });
 
