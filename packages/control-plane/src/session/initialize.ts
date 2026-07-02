@@ -7,6 +7,10 @@ import { createLogger } from "../logger";
 
 const logger = createLogger("session-init");
 
+function hasBranchContext(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 /**
  * All data needed to initialize a new session (create or spawn).
  * Shared between the router and the DO init handler to prevent type drift.
@@ -64,9 +68,24 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  const hasRepoOwner = input.repoOwner !== null;
+  const hasRepoName = input.repoName !== null;
+  const hasRepoId = input.repoId != null;
+  if (
+    hasRepoOwner !== hasRepoName ||
+    (!hasRepoOwner && hasRepoId) ||
+    (hasRepoOwner && !hasRepoId)
+  ) {
+    throw new Error("Repository context must include repoOwner, repoName, and repoId together");
+  }
+  if (!hasRepoOwner && (hasBranchContext(input.branch) || hasBranchContext(input.defaultBranch))) {
+    throw new Error("No-repository sessions must not include branch context");
+  }
+
+  const branch = hasRepoOwner ? input.branch : null;
+  const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
   const now = Date.now();
-  const baseBranch =
-    input.repoOwner && input.repoName ? input.branch || input.defaultBranch || "main" : null;
+  const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(env.DB);
@@ -111,8 +130,8 @@ export async function initializeSession(
           repoOwner: input.repoOwner,
           repoName: input.repoName,
           repoId: input.repoId,
-          defaultBranch: input.defaultBranch,
-          branch: input.branch,
+          defaultBranch,
+          branch,
           title: input.title,
           model: input.model,
           reasoningEffort: input.reasoningEffort,

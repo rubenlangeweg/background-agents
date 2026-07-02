@@ -72,6 +72,14 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
+def require_complete_repo_pair(repo_owner: str | None, repo_name: str | None) -> None:
+    if bool(repo_owner) != bool(repo_name):
+        raise HTTPException(
+            status_code=400,
+            detail="repo_owner and repo_name must be provided together",
+        )
+
+
 @app.function(
     image=function_image,
     secrets=[github_app_secrets, internal_api_secret],
@@ -112,6 +120,10 @@ async def api_create_sandbox(
     control_plane_url = request.get("control_plane_url")
     require_valid_control_plane_url(control_plane_url)
 
+    repo_owner = request.get("repo_owner")
+    repo_name = request.get("repo_name")
+    require_complete_repo_pair(repo_owner, repo_name)
+
     try:
         # Import types and manager directly
         from .sandbox import SessionConfig
@@ -121,8 +133,6 @@ async def api_create_sandbox(
 
         snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
-        repo_owner = request.get("repo_owner")
-        repo_name = request.get("repo_name")
         fallback_clone_token = (
             resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
@@ -426,16 +436,18 @@ async def api_restore_sandbox(
     if not snapshot_image_id:
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
+    session_config = request.get("session_config", {})
+    repo_owner = session_config.get("repo_owner") if isinstance(session_config, dict) else None
+    repo_name = session_config.get("repo_name") if isinstance(session_config, dict) else None
+    require_complete_repo_pair(repo_owner, repo_name)
+
     try:
         from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
 
-        session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
         timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
-        repo_owner = session_config.get("repo_owner") if isinstance(session_config, dict) else None
-        repo_name = session_config.get("repo_name") if isinstance(session_config, dict) else None
 
         manager = SandboxManager()
         clone_token = resolve_clone_token() if repo_owner and repo_name else None

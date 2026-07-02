@@ -108,9 +108,13 @@ export function createSessionLifecycleHandler(
       const hasRepoOwner = repoOwner !== null;
       const hasRepoName = repoName !== null;
       const hasRepoId = body.repoId != null;
-      if (hasRepoOwner !== hasRepoName || (!hasRepoOwner && hasRepoId)) {
+      if (
+        hasRepoOwner !== hasRepoName ||
+        (!hasRepoOwner && hasRepoId) ||
+        (hasRepoOwner && !hasRepoId)
+      ) {
         return Response.json(
-          { error: "Repository target must include repoOwner and repoName together" },
+          { error: "Repository target must include repoOwner, repoName, and repoId together" },
           { status: 400 }
         );
       }

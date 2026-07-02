@@ -138,7 +138,7 @@ describe("applyMigrations", () => {
     ]);
     const originalExec = mock.sql.exec.bind(mock.sql);
     mock.sql.exec = (query: string, ...params: unknown[]): SqlResult => {
-      if (query.includes("ALTER TABLE")) {
+      if (query.includes("ALTER TABLE") && query.includes("ADD COLUMN")) {
         throw new Error("duplicate column name: session_name");
       }
       return originalExec(query, ...params);
@@ -200,5 +200,25 @@ describe("applyMigrations", () => {
       /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(c.query.trim())
     );
     expect(transactionControlStatements).toEqual([]);
+  });
+
+  it("normalizes partial session repository pairs during migration 31", () => {
+    applyMigrations(mock.sql);
+
+    const sessionRepoMigration = mock.calls.find(
+      (c) =>
+        c.query.includes("session_0031_new") &&
+        c.query.includes("normalized_repo_owner") &&
+        c.query.includes("normalized_repo_name")
+    );
+
+    expect(sessionRepoMigration).toBeDefined();
+    expect(sessionRepoMigration!.query).toContain("TRIM(repo_owner");
+    expect(sessionRepoMigration!.query).toContain("TRIM(repo_name");
+    expect(sessionRepoMigration!.query).toContain(
+      "WHEN normalized_repo_owner IS NULL OR normalized_repo_name IS NULL THEN NULL"
+    );
+    expect(sessionRepoMigration!.query).toContain("ELSE repo_id");
+    expect(sessionRepoMigration!.query).toContain("ELSE base_branch");
   });
 });

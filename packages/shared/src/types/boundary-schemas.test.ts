@@ -3,6 +3,9 @@ import {
   clientMessageSchema,
   createSessionRequestSchema,
   sandboxEventSchema,
+  serverMessageSchema,
+  spawnChildSessionRequestSchema,
+  spawnContextSchema,
   userPreferencesRequestSchema,
 } from ".";
 
@@ -21,7 +24,7 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("parses a valid repo-less session creation request", () => {
+    it("parses a repo-less session creation request for route-level validation", () => {
       const result = createSessionRequestSchema.safeParse({
         title: "Incident sweep",
         model: "anthropic/claude-sonnet-4-6",
@@ -30,9 +33,21 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("rejects a partial repository session creation request", () => {
-      const result = createSessionRequestSchema.safeParse({
+    it("rejects partial repository metadata", () => {
+      const ownerOnly = createSessionRequestSchema.safeParse({
         repoOwner: "open-inspect",
+      });
+      const nameOnly = createSessionRequestSchema.safeParse({
+        repoName: "background-agents",
+      });
+
+      expect(ownerOnly.success).toBe(false);
+      expect(nameOnly.success).toBe(false);
+    });
+
+    it("rejects malformed session creation field types", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: 123,
       });
 
       expect(result.success).toBe(false);
@@ -156,6 +171,67 @@ describe("boundary schemas", () => {
     });
   });
 
+  describe("serverMessageSchema", () => {
+    it("parses a valid subscribed message with nullable fields", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "subscribed",
+        sessionId: "session-1",
+        state: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "active",
+          sandboxStatus: "ready",
+          messageCount: 1,
+          createdAt: 123,
+          parentSessionId: null,
+          tunnelUrls: null,
+        },
+        artifacts: [
+          {
+            id: "artifact-1",
+            type: "screenshot",
+            url: null,
+            metadata: null,
+            createdAt: 124,
+          },
+        ],
+        participantId: "participant-1",
+        replay: {
+          events: [],
+          hasMore: false,
+          cursor: null,
+        },
+        spawnError: null,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial sandbox event message", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "sandbox_event",
+        event: {
+          type: "token",
+          content: "hello",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        },
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an unknown message type", () => {
+      const result = serverMessageSchema.safeParse({ type: "unexpected" });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("userPreferencesRequestSchema", () => {
     it("parses a valid user preferences request", () => {
       const result = userPreferencesRequestSchema.safeParse({
@@ -169,6 +245,86 @@ describe("boundary schemas", () => {
     it("rejects malformed preference fields", () => {
       const result = userPreferencesRequestSchema.safeParse({
         model: 123,
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("spawnChildSessionRequestSchema", () => {
+    it("parses a valid child session request", () => {
+      const result = spawnChildSessionRequestSchema.safeParse({
+        title: "Investigate failure",
+        prompt: "Find and fix the failing test",
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial child session request", () => {
+      const result = spawnChildSessionRequestSchema.safeParse({
+        title: "Missing prompt",
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("spawnContextSchema", () => {
+    it("parses a valid spawn context with nullable fields", () => {
+      const result = spawnContextSchema.safeParse({
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        repoId: null,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        owner: {
+          userId: "user-1",
+          scmUserId: null,
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmAccessTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses a repo-less spawn context", () => {
+      const result = spawnContextSchema.safeParse({
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        owner: {
+          userId: "user-1",
+          scmUserId: null,
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmAccessTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed partial spawn context", () => {
+      const result = spawnContextSchema.safeParse({
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
       });
 
       expect(result.success).toBe(false);

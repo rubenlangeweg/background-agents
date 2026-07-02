@@ -55,7 +55,29 @@ export type SpawnSource =
   | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
+const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+const sandboxStatusSchema = z.enum([
+  "pending",
+  "spawning",
+  "connecting",
+  "warming",
+  "syncing",
+  "ready",
+  "running",
+  "stale",
+  "snapshotting",
+  "stopped",
+  "failed",
+]);
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
 const spawnSourceSchema = z.enum([
   "user",
   "agent",
@@ -126,6 +148,14 @@ export interface SessionArtifact {
   metadata: Record<string, unknown> | null;
   createdAt: number;
 }
+
+const sessionArtifactSchema = z.object({
+  id: z.string(),
+  type: artifactTypeSchema,
+  url: z.string().nullable(),
+  metadata: recordSchema.nullable(),
+  createdAt: z.number(),
+});
 
 /**
  * Metadata stored on branch artifacts when PR creation falls back to manual flow.
@@ -310,58 +340,6 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 
 // WebSocket message types
-export type ServerMessage =
-  | { type: "pong"; timestamp: number }
-  | {
-      type: "subscribed";
-      sessionId: string;
-      state: SessionState;
-      artifacts: SessionArtifact[];
-      participantId: string;
-      participant?: { participantId: string; name: string; avatar?: string };
-      replay?: {
-        events: SandboxEvent[];
-        hasMore: boolean;
-        cursor: { timestamp: number; id: string } | null;
-      };
-      spawnError?: string | null;
-    }
-  | { type: "prompt_queued"; messageId: string; position: number }
-  | { type: "sandbox_event"; event: SandboxEvent }
-  | { type: "presence_sync"; participants: ParticipantPresence[] }
-  | { type: "presence_update"; participants: ParticipantPresence[] }
-  | { type: "presence_leave"; userId: string }
-  | { type: "sandbox_warming" }
-  | { type: "sandbox_spawning" }
-  | { type: "sandbox_status"; status: SandboxStatus }
-  | { type: "sandbox_ready" }
-  | { type: "sandbox_error"; error: string }
-  | { type: "artifact_created"; artifact: SessionArtifact }
-  | { type: "session_branch"; branchName: string }
-  | { type: "snapshot_saved"; imageId: string; reason: string }
-  | { type: "sandbox_restored"; message: string }
-  | { type: "sandbox_warning"; message: string }
-  | { type: "processing_status"; isProcessing: boolean }
-  | {
-      type: "history_page";
-      items: SandboxEvent[];
-      hasMore: boolean;
-      cursor: { timestamp: number; id: string } | null;
-    }
-  | { type: "session_status"; status: SessionStatus }
-  | { type: "session_title"; title: string }
-  | {
-      type: "child_session_update";
-      childSessionId: string;
-      status: SessionStatus;
-      title: string | null;
-    }
-  | { type: "code_server_info"; url: string; password: string }
-  | { type: "ttyd_info"; url: string; token: string }
-  | { type: "tunnel_urls"; urls: Record<string, string> }
-  | { type: "sandbox_dashboard_url"; url: string }
-  | { type: "error"; code: string; message: string };
-
 // Session state sent to clients
 export interface SessionState {
   id: string;
@@ -396,6 +374,107 @@ export interface ParticipantPresence {
   status: "active" | "idle" | "away";
   lastSeen: number;
 }
+
+const sessionStateSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  branchName: z.string().nullable(),
+  status: sessionStatusSchema,
+  sandboxStatus: sandboxStatusSchema,
+  messageCount: z.number(),
+  createdAt: z.number(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  isProcessing: z.boolean().optional(),
+  parentSessionId: z.string().nullable().optional(),
+  totalCost: z.number().optional(),
+  codeServerUrl: z.string().nullable().optional(),
+  codeServerPassword: z.string().nullable().optional(),
+  tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
+  ttydUrl: z.string().nullable().optional(),
+  ttydToken: z.string().nullable().optional(),
+  sandboxDashboardUrl: z.string().nullable().optional(),
+});
+
+const participantPresenceSchema = z.object({
+  participantId: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  avatar: z.string().optional(),
+  status: z.enum(["active", "idle", "away"]),
+  lastSeen: z.number(),
+});
+
+const participantSummarySchema = z.object({
+  participantId: z.string(),
+  name: z.string(),
+  avatar: z.string().optional(),
+});
+
+const historyCursorSchema = z.object({ timestamp: z.number(), id: z.string() });
+
+export const serverMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("pong"), timestamp: z.number() }),
+  z.object({
+    type: z.literal("subscribed"),
+    sessionId: z.string(),
+    state: sessionStateSchema,
+    artifacts: z.array(sessionArtifactSchema),
+    participantId: z.string(),
+    participant: participantSummarySchema.optional(),
+    replay: z
+      .object({
+        events: z.array(sandboxEventSchema),
+        hasMore: z.boolean(),
+        cursor: historyCursorSchema.nullable(),
+      })
+      .optional(),
+    spawnError: z.string().nullable().optional(),
+  }),
+  z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
+  z.object({ type: z.literal("sandbox_event"), event: sandboxEventSchema }),
+  z.object({ type: z.literal("presence_sync"), participants: z.array(participantPresenceSchema) }),
+  z.object({
+    type: z.literal("presence_update"),
+    participants: z.array(participantPresenceSchema),
+  }),
+  z.object({ type: z.literal("presence_leave"), userId: z.string() }),
+  z.object({ type: z.literal("sandbox_warming") }),
+  z.object({ type: z.literal("sandbox_spawning") }),
+  z.object({ type: z.literal("sandbox_status"), status: sandboxStatusSchema }),
+  z.object({ type: z.literal("sandbox_ready") }),
+  z.object({ type: z.literal("sandbox_error"), error: z.string() }),
+  z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
+  z.object({ type: z.literal("session_branch"), branchName: z.string() }),
+  z.object({ type: z.literal("snapshot_saved"), imageId: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("sandbox_restored"), message: z.string() }),
+  z.object({ type: z.literal("sandbox_warning"), message: z.string() }),
+  z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
+  z.object({
+    type: z.literal("history_page"),
+    items: z.array(sandboxEventSchema),
+    hasMore: z.boolean(),
+    cursor: historyCursorSchema.nullable(),
+  }),
+  z.object({ type: z.literal("session_status"), status: sessionStatusSchema }),
+  z.object({ type: z.literal("session_title"), title: z.string() }),
+  z.object({
+    type: z.literal("child_session_update"),
+    childSessionId: z.string(),
+    status: sessionStatusSchema,
+    title: z.string().nullable(),
+  }),
+  z.object({ type: z.literal("code_server_info"), url: z.string(), password: z.string() }),
+  z.object({ type: z.literal("ttyd_info"), url: z.string(), token: z.string() }),
+  z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
+  z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
+  z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
+]);
+
+export type ServerMessage = z.infer<typeof serverMessageSchema>;
 
 // Repository types for GitHub App installation
 export interface InstallationRepository {
@@ -564,47 +643,77 @@ function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-// API response types
-export const createSessionRequestSchema = z
-  .object({
-    repoOwner: z.string().nullish(),
-    repoName: z.string().nullish(),
-    title: z.string().optional(),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    branch: z.string().optional(),
-  })
-  .refine(
-    (data) => hasRepositoryIdentifier(data.repoOwner) === hasRepositoryIdentifier(data.repoName),
-    {
+interface CreateSessionRepositoryFields {
+  repoOwner?: string | null;
+  repoName?: string | null;
+  branch?: string | null;
+}
+
+function validateSessionRepoPair(value: CreateSessionRepositoryFields, ctx: z.RefinementCtx): void {
+  const repoOwnerMissing = !hasRepositoryIdentifier(value.repoOwner);
+  const repoNameMissing = !hasRepositoryIdentifier(value.repoName);
+  if (repoOwnerMissing !== repoNameMissing) {
+    ctx.addIssue({
+      code: "custom",
       message: "repoOwner and repoName must be provided together",
-      path: ["repoName"],
-    }
-  );
+      path: repoOwnerMissing ? ["repoOwner"] : ["repoName"],
+    });
+  }
+}
+
+function validateSessionRepositoryContext(
+  value: CreateSessionRepositoryFields,
+  ctx: z.RefinementCtx
+): void {
+  validateSessionRepoPair(value, ctx);
+
+  if (!hasRepositoryIdentifier(value.repoOwner) && value.branch?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      message: "branch requires repoOwner and repoName",
+      path: ["branch"],
+    });
+  }
+}
+
+const createSessionRequestBaseSchema = z.object({
+  repoOwner: z.string().nullish(),
+  repoName: z.string().nullish(),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  branch: z.string().optional(),
+});
+
+export const createSessionRequestSchema = createSessionRequestBaseSchema.superRefine(
+  validateSessionRepositoryContext
+);
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
-export const createSessionInputSchema = createSessionRequestSchema.extend({
-  userId: z.string().optional(),
-  spawnSource: spawnSourceSchema.optional(),
-  authProvider: z.enum(["github", "google"]).optional(),
-  authUserId: z.string().optional(),
-  authEmail: z.string().optional(),
-  authName: z.string().optional(),
-  authAvatarUrl: z.string().optional(),
-  scmUserId: z.string().optional(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
-  scmAvatarUrl: z.string().optional(),
-  actorUserId: z.string().optional(),
-  actorDisplayName: z.string().optional(),
-  actorEmail: z.string().optional(),
-  actorAvatarUrl: z.string().optional(),
-  scmToken: z.string().optional(),
-  scmRefreshToken: z.string().optional(),
-  scmTokenExpiresAt: z.number().optional(),
-});
+export const createSessionInputSchema = createSessionRequestBaseSchema
+  .extend({
+    userId: z.string().optional(),
+    spawnSource: spawnSourceSchema.optional(),
+    authProvider: z.enum(["github", "google"]).optional(),
+    authUserId: z.string().optional(),
+    authEmail: z.string().optional(),
+    authName: z.string().optional(),
+    authAvatarUrl: z.string().optional(),
+    scmUserId: z.string().optional(),
+    scmLogin: z.string().optional(),
+    scmName: z.string().optional(),
+    scmEmail: z.string().optional(),
+    scmAvatarUrl: z.string().optional(),
+    actorUserId: z.string().optional(),
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
+    scmToken: z.string().optional(),
+    scmRefreshToken: z.string().optional(),
+    scmTokenExpiresAt: z.number().optional(),
+  })
+  .superRefine(validateSessionRepositoryContext);
 
 export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
@@ -631,34 +740,38 @@ export interface ListSessionsResponse {
 // --- Agent-spawned sub-sessions ---
 
 /** Request body for POST /sessions/:parentId/children */
-export interface SpawnChildSessionRequest {
-  title: string;
-  prompt: string;
-  repoOwner?: string;
-  repoName?: string;
-  model?: string;
-  reasoningEffort?: string;
-}
+export const spawnChildSessionRequestSchema = z.object({
+  title: z.string(),
+  prompt: z.string(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+});
+
+export type SpawnChildSessionRequest = z.infer<typeof spawnChildSessionRequestSchema>;
 
 /** Returned by parent DO's GET /internal/spawn-context */
-export interface SpawnContext {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  model: string;
-  reasoningEffort: string | null;
-  baseBranch: string | null;
-  owner: {
-    userId: string;
-    scmUserId: string | null;
-    scmLogin: string | null;
-    scmName: string | null;
-    scmEmail: string | null;
-    scmAccessTokenEncrypted: string | null;
-    scmRefreshTokenEncrypted: string | null;
-    scmTokenExpiresAt: number | null;
-  };
-}
+export const spawnContextSchema = z.object({
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  repoId: z.number().nullable(),
+  model: z.string(),
+  reasoningEffort: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  owner: z.object({
+    userId: z.string(),
+    scmUserId: z.string().nullable(),
+    scmLogin: z.string().nullable(),
+    scmName: z.string().nullable(),
+    scmEmail: z.string().nullable(),
+    scmAccessTokenEncrypted: z.string().nullable(),
+    scmRefreshTokenEncrypted: z.string().nullable(),
+    scmTokenExpiresAt: z.number().nullable(),
+  }),
+});
+
+export type SpawnContext = z.infer<typeof spawnContextSchema>;
 
 /** Returned by child DO's GET /internal/child-summary */
 export interface ChildSessionFinalResponse extends AgentResponse {
@@ -758,6 +871,25 @@ export type AutomationTriggerType =
   | "slack_event";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
+export type AutomationRunGroupStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial_failed"
+  | "skipped";
+
+export interface AutomationTarget {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string | null;
+}
+
+export interface AutomationTargetInput {
+  repoOwner: string;
+  repoName: string;
+}
 
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
@@ -765,6 +897,7 @@ import type { TriggerConfig } from "../triggers/conditions";
 export interface AutomationBase {
   id: string;
   name: string;
+  targets: AutomationTarget[];
   instructions: string;
   triggerType: AutomationTriggerType;
   scheduleCron: string | null;
@@ -802,18 +935,22 @@ export interface CreateAutomationRequestBase {
   repoOwner?: string | null;
   repoName?: string | null;
   baseBranch?: string | null;
+  targets?: AutomationTargetInput[];
 }
 
 export type CreateAutomationRequest = CreateAutomationRequestBase;
 
 export interface UpdateAutomationRequest {
   name?: string;
+  repoOwner?: string | null;
+  repoName?: string | null;
   instructions?: string;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
   baseBranch?: string | null;
+  targets?: AutomationTargetInput[];
   eventType?: string;
   triggerConfig?: TriggerConfig;
 }
@@ -833,6 +970,32 @@ export interface AutomationRun {
   artifactSummary: string | null;
   triggerKey: string | null;
   concurrencyKey: string | null;
+  groupId: string | null;
+  targetRepoOwner: string | null;
+  targetRepoName: string | null;
+  targetRepoId: number | null;
+  targetBaseBranch: string | null;
+}
+
+export interface AutomationRunGroup {
+  id: string;
+  automationId: string;
+  status: AutomationRunGroupStatus;
+  skipReason: string | null;
+  failureReason: string | null;
+  scheduledAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  failureCountedAt: number | null;
+  totalRuns: number;
+  startingRuns: number;
+  runningRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  skippedRuns: number;
+  runs: AutomationRun[];
 }
 
 export interface ListAutomationsResponse {
@@ -842,6 +1005,7 @@ export interface ListAutomationsResponse {
 
 export interface ListAutomationRunsResponse {
   runs: AutomationRun[];
+  groups?: AutomationRunGroup[];
   total: number;
 }
 

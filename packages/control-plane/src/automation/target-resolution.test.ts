@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRow, AutomationTargetRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { SourceControlProvider } from "../source-control";
-import { resolveAutomationSessionLaunches } from "./target-resolution";
+import { resolveAutomationSessionLaunches, resolveAutomationTargetRow } from "./target-resolution";
 
 const automation: AutomationRow = {
   id: "auto-1",
@@ -28,6 +28,16 @@ const automation: AutomationRow = {
   event_type: null,
   trigger_config: null,
   trigger_auth_data: null,
+};
+
+const targetRow: AutomationTargetRow = {
+  automation_id: "auto-1",
+  repo_owner: "ACME",
+  repo_name: "API",
+  repo_id: 222,
+  base_branch: "release",
+  created_at: 1000,
+  updated_at: 1000,
 };
 
 function createProvider(
@@ -123,6 +133,52 @@ describe("automation target resolution", () => {
       )
     ).rejects.toThrow(
       "Automation repository target must include repo_owner and repo_name together"
+    );
+  });
+
+  it("validates target row access and returns child run repo fields", async () => {
+    const provider = createProvider({
+      repoId: 22222,
+      repoOwner: "acme",
+      repoName: "api",
+      defaultBranch: "main",
+    });
+
+    await expect(resolveAutomationTargetRow({} as Env, targetRow, provider)).resolves.toEqual({
+      repoOwner: "acme",
+      repoName: "api",
+      repoId: 22222,
+      baseBranch: "release",
+    });
+
+    expect(provider.checkRepositoryAccess).toHaveBeenCalledWith({
+      owner: "ACME",
+      name: "API",
+    });
+  });
+
+  it("falls back to the repository default branch for target rows", async () => {
+    const provider = createProvider({
+      repoId: 22222,
+      repoOwner: "acme",
+      repoName: "api",
+      defaultBranch: "develop",
+    });
+
+    const result = await resolveAutomationTargetRow(
+      {} as Env,
+      { ...targetRow, base_branch: "" },
+      provider
+    );
+
+    expect(result).toMatchObject({ baseBranch: "develop" });
+  });
+
+  it("fails when the target row repository is not accessible", async () => {
+    const provider = createProvider(null);
+
+    await expect(resolveAutomationTargetRow({} as Env, targetRow, provider)).rejects.toThrow(
+      "Repository is not accessible for the configured SCM provider"
     );
   });
 });
