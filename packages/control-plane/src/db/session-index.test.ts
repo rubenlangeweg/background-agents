@@ -50,8 +50,10 @@ function normalizeQuery(query: string): string {
 
 class FakeD1Database {
   private rows = new Map<string, SessionRow>();
+  readonly preparedQueries: string[] = [];
 
   prepare(query: string) {
+    this.preparedQueries.push(normalizeQuery(query));
     return new FakePreparedStatement(this, query);
   }
 
@@ -467,7 +469,6 @@ describe("SessionIndexStore", () => {
 
       const result = await store.list();
       expect(result.sessions.map((s) => s.id)).toEqual(["new", "mid", "old"]);
-      expect(result.total).toBe(3);
       expect(result.hasMore).toBe(false);
     });
 
@@ -478,7 +479,6 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ status: "active" });
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].id).toBe("a");
-      expect(result.total).toBe(1);
     });
 
     it("filters by excludeStatus", async () => {
@@ -489,7 +489,6 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ excludeStatus: "archived" });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map((s) => s.id)).toEqual(["c", "a"]);
-      expect(result.total).toBe(2);
     });
 
     it("filters by creator user ids", async () => {
@@ -501,7 +500,6 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ createdByUserIds: ["alice"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
-      expect(result.total).toBe(2);
       expect(result.hasMore).toBe(false);
     });
 
@@ -513,7 +511,6 @@ describe("SessionIndexStore", () => {
 
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].id).toBe("match");
-      expect(result.total).toBe(1);
     });
 
     it("supports multiple creator user ids", async () => {
@@ -524,7 +521,6 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ createdByUserIds: ["alice", "bob"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["bob", "alice"]);
-      expect(result.total).toBe(2);
     });
 
     it("supports pagination with limit and offset", async () => {
@@ -534,7 +530,6 @@ describe("SessionIndexStore", () => {
 
       const page1 = await store.list({ limit: 2, offset: 0 });
       expect(page1.sessions).toHaveLength(2);
-      expect(page1.total).toBe(5);
       expect(page1.hasMore).toBe(true);
 
       const page2 = await store.list({ limit: 2, offset: 2 });
@@ -544,6 +539,21 @@ describe("SessionIndexStore", () => {
       const page3 = await store.list({ limit: 2, offset: 4 });
       expect(page3.sessions).toHaveLength(1);
       expect(page3.hasMore).toBe(false);
+    });
+
+    it("derives hasMore without counting", async () => {
+      for (let i = 0; i < 3; i++) {
+        await store.create(makeSession({ id: `s${i}`, updatedAt: i * 1000 }));
+      }
+      db.preparedQueries.length = 0;
+
+      const result = await store.list({ limit: 2 });
+
+      expect(result.sessions.map((s) => s.id)).toEqual(["s2", "s1"]);
+      expect(result.hasMore).toBe(true);
+      expect(db.preparedQueries.some((query) => QUERY_PATTERNS.SELECT_COUNT.test(query))).toBe(
+        false
+      );
     });
   });
 
