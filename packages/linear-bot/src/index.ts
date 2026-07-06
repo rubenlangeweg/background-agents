@@ -165,9 +165,6 @@ async function handleAuthHealthWebhook(params: {
     return { ok: true as const, skipped: true as const, reason: "duplicate" };
   }
 
-  const permissionDetails =
-    eventType === "OAuthApp" ? undefined : readPermissionChangeDetails(payload);
-
   if (eventType === "OAuthApp") {
     await deleteOAuthToken(env, orgId);
     await setLinearAuthState(env, {
@@ -177,39 +174,43 @@ async function handleAuthHealthWebhook(params: {
       traceId,
       details: { eventType, eventAction: action },
     });
-  } else {
-    // Team-access changes are diagnostic only: the OAuth token stays valid, so the
-    // workspace stays green. A sticky reauthorization_required state is cleared only
-    // by a successful OAuth callback, never by a permission event.
-    const existing = await getLinearAuthState(env, orgId);
-    const preserveExistingReauth = existing?.status === "reauthorization_required";
-    await setLinearAuthState(env, {
-      orgId,
-      status: preserveExistingReauth ? "reauthorization_required" : "connected",
-      reason: preserveExistingReauth ? existing.reason : "permission_change",
-      traceId,
-      details: {
-        eventType,
-        eventAction: action,
-        canAccessAllPublicTeams: permissionDetails?.canAccessAllPublicTeams,
-        addedTeamIds: permissionDetails?.addedTeamIds,
-        removedTeamIds: permissionDetails?.removedTeamIds,
-      },
+    log.info("webhook.linear_auth_health", {
+      trace_id: traceId,
+      org_id: orgId,
+      type: eventType,
+      action,
     });
+    return { ok: true as const };
   }
+
+  // Team-access changes are diagnostic only: the OAuth token stays valid, so the
+  // workspace stays green. A sticky reauthorization_required state is cleared only
+  // by a successful OAuth callback, never by a permission event.
+  const permissionDetails = readPermissionChangeDetails(payload);
+  const existing = await getLinearAuthState(env, orgId);
+  const preserveExistingReauth = existing?.status === "reauthorization_required";
+  await setLinearAuthState(env, {
+    orgId,
+    status: preserveExistingReauth ? "reauthorization_required" : "connected",
+    reason: preserveExistingReauth ? existing.reason : "permission_change",
+    traceId,
+    details: {
+      eventType,
+      eventAction: action,
+      canAccessAllPublicTeams: permissionDetails.canAccessAllPublicTeams,
+      addedTeamIds: permissionDetails.addedTeamIds,
+      removedTeamIds: permissionDetails.removedTeamIds,
+    },
+  });
 
   log.info("webhook.linear_auth_health", {
     trace_id: traceId,
     org_id: orgId,
     type: eventType,
     action,
-    ...(permissionDetails
-      ? {
-          can_access_all_public_teams: permissionDetails.canAccessAllPublicTeams,
-          added_team_ids: permissionDetails.addedTeamIds,
-          removed_team_ids: permissionDetails.removedTeamIds,
-        }
-      : {}),
+    can_access_all_public_teams: permissionDetails.canAccessAllPublicTeams,
+    added_team_ids: permissionDetails.addedTeamIds,
+    removed_team_ids: permissionDetails.removedTeamIds,
   });
   return { ok: true as const };
 }

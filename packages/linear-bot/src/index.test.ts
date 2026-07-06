@@ -314,6 +314,7 @@ describe("POST /webhook", () => {
   });
 
   it("records removed team access as a diagnostic without blocking the workspace", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv);
     const payload = {
@@ -343,7 +344,18 @@ describe("POST /webhook", () => {
         removedTeamIds: ["team-1"],
       },
     });
+    const logEvents = logSpy.mock.calls.map(([line]) => JSON.parse(String(line)) as object);
+    expect(logEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "webhook.linear_auth_health",
+        org_id: "org-1",
+        can_access_all_public_teams: false,
+        added_team_ids: [],
+        removed_team_ids: ["team-1"],
+      })
+    );
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 
   it("requires Linear-Delivery before processing auth-health webhooks", async () => {
