@@ -122,9 +122,8 @@ function isAuthHealthWebhook(eventType: string, action: string): boolean {
   );
 }
 
-function isWebhookTimestampStale(payload: Record<string, unknown>, now: number): boolean {
-  const timestamp = readNumberField(payload, "webhookTimestamp");
-  return timestamp !== null && Math.abs(now - timestamp) > WEBHOOK_TIMESTAMP_MAX_SKEW_MS;
+function isWebhookTimestampStale(timestamp: number, now: number): boolean {
+  return Math.abs(now - timestamp) > WEBHOOK_TIMESTAMP_MAX_SKEW_MS;
 }
 
 function readPermissionChangeDetails(payload: Record<string, unknown>): {
@@ -292,7 +291,8 @@ app.post("/webhook", async (c) => {
   const deliveryId = c.req.header("linear-delivery") ?? null;
 
   if (isAuthHealthWebhook(eventType, action)) {
-    if (readNumberField(payload, "webhookTimestamp") === null) {
+    const webhookTimestamp = readNumberField(payload, "webhookTimestamp");
+    if (webhookTimestamp === null) {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,
         reason: "missing_or_invalid_webhook_timestamp",
@@ -300,15 +300,6 @@ app.post("/webhook", async (c) => {
         action,
       });
       return c.json({ error: "Invalid payload" }, 400);
-    }
-    if (isWebhookTimestampStale(payload, Date.now())) {
-      log.warn("webhook.invalid_payload", {
-        trace_id: traceId,
-        reason: "stale_timestamp",
-        type: eventType,
-        action,
-      });
-      return c.json({ error: "Stale webhook payload" }, 400);
     }
     if (!deliveryId) {
       log.warn("webhook.invalid_payload", {
@@ -318,6 +309,15 @@ app.post("/webhook", async (c) => {
         action,
       });
       return c.json({ error: "Missing Linear-Delivery header" }, 400);
+    }
+    if (isWebhookTimestampStale(webhookTimestamp, Date.now())) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "stale_timestamp",
+        type: eventType,
+        action,
+      });
+      return c.json({ ok: true, skipped: true, reason: "stale_timestamp" });
     }
     const result = await handleAuthHealthWebhook({
       env: c.env,

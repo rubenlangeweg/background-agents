@@ -123,13 +123,11 @@ export class LinearAuthError extends Error implements LinearAuthFailure {
   }
 }
 
-export type OAuthTokenResult =
-  | { ok: true; token: string }
-  | (LinearAuthFailure & {
-      ok: false;
-      reauthorizationRequired: boolean;
-      retryable: boolean;
-    });
+type LinearAuthFailureResult = LinearAuthFailure & {
+  ok: false;
+  reauthorizationRequired: boolean;
+  retryable: boolean;
+};
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -262,15 +260,6 @@ export async function getOAuthTokenOrThrow(env: Env, orgId: string): Promise<str
   }
 }
 
-export async function getOAuthToken(env: Env, orgId: string): Promise<string | null> {
-  try {
-    return await getOAuthTokenOrThrow(env, orgId);
-  } catch (err) {
-    if (err instanceof LinearAuthError) return null;
-    throw err;
-  }
-}
-
 function reauthorizationRequiredForReason(reason: LinearAuthFailureReason): boolean {
   return (
     reason === "missing_token" ||
@@ -281,7 +270,7 @@ function reauthorizationRequiredForReason(reason: LinearAuthFailureReason): bool
   );
 }
 
-function authFailureFromError(error: LinearAuthError): Extract<OAuthTokenResult, { ok: false }> {
+function authFailureFromError(error: LinearAuthError): LinearAuthFailureResult {
   const reauthorizationRequired = reauthorizationRequiredForReason(error.reason);
   return {
     ok: false,
@@ -294,58 +283,37 @@ function authFailureFromError(error: LinearAuthError): Extract<OAuthTokenResult,
   };
 }
 
-export async function getOAuthTokenResult(env: Env, orgId: string): Promise<OAuthTokenResult> {
-  try {
-    return { ok: true, token: await getOAuthTokenOrThrow(env, orgId) };
-  } catch (err) {
-    if (err instanceof LinearAuthError) return authFailureFromError(err);
-    throw err;
-  }
-}
-
 // ─── Linear API Client ──────────────────────────────────────────────────────
 
 export interface LinearApiClient {
   accessToken: string;
 }
 
-export async function getLinearClientOrThrow(env: Env, orgId: string): Promise<LinearApiClient> {
-  return { accessToken: await getOAuthTokenOrThrow(env, orgId) };
-}
-
-export async function getLinearClient(env: Env, orgId: string): Promise<LinearApiClient | null> {
-  try {
-    return await getLinearClientOrThrow(env, orgId);
-  } catch (err) {
-    if (err instanceof LinearAuthError) return null;
-    throw err;
-  }
-}
-
-export type LinearClientResult =
-  | { ok: true; client: LinearApiClient }
-  | Extract<OAuthTokenResult, { ok: false }>;
-
-export async function getLinearClientResult(env: Env, orgId: string): Promise<LinearClientResult> {
-  try {
-    return { ok: true, client: await getLinearClientOrThrow(env, orgId) };
-  } catch (err) {
-    if (err instanceof LinearAuthError) return authFailureFromError(err);
-    throw err;
-  }
-}
-
 export type LinearAuthContext =
   | { ok: true; client: LinearApiClient }
-  | (Extract<OAuthTokenResult, { ok: false }> & {
+  | (LinearAuthFailureResult & {
       authStatus: LinearWorkspaceAuthStatus;
       reconnectUrl: string;
     });
 
-function authStatusForFailure(
-  failure: Extract<OAuthTokenResult, { ok: false }>
-): LinearWorkspaceAuthStatus {
+function authStatusForFailure(failure: LinearAuthFailureResult): LinearWorkspaceAuthStatus {
   return failure.reauthorizationRequired ? "reauthorization_required" : "transient_failure";
+}
+
+async function recordLinearAuthState(
+  env: Env,
+  params: Parameters<typeof setLinearAuthState>[1]
+): Promise<void> {
+  try {
+    await setLinearAuthState(env, params);
+  } catch (error) {
+    log.warn("oauth.auth_state_update_failed", {
+      org_id: params.orgId,
+      auth_status: params.status,
+      reason: params.reason,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+  }
 }
 
 function isLinearAuthFailureReason(value: unknown): value is LinearAuthFailureReason {
@@ -389,47 +357,52 @@ export async function getLinearAuthContext(
     };
   }
 
-  const result = await getLinearClientResult(env, orgId);
-  if (result.ok) {
-    if (!existing || existing.status !== "connected") {
-      await setLinearAuthState(env, {
-        orgId,
-        status: "connected",
-        reason: "client_available",
-        traceId,
-      });
+  let client: LinearApiClient;
+  try {
+    client = { accessToken: await getOAuthTokenOrThrow(env, orgId) };
+  } catch (err) {
+    if (!(err instanceof LinearAuthError)) throw err;
+
+    const result = authFailureFromError(err);
+    const authStatus = authStatusForFailure(result);
+    if (result.reauthorizationRequired && result.reason !== "missing_token") {
+      try {
+        await deleteOAuthToken(env, orgId);
+      } catch (error) {
+        log.warn("oauth.delete_invalid_token_failed", {
+          org_id: orgId,
+          auth_failure_reason: result.reason,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
     }
-    return result;
+    await recordLinearAuthState(env, {
+      orgId,
+      status: authStatus,
+      reason: result.reason,
+      traceId,
+      details: {
+        oauthStatus: result.status,
+        oauthError: result.oauthError,
+        oauthErrorDescription: result.oauthErrorDescription,
+      },
+    });
+    return {
+      ...result,
+      authStatus,
+      reconnectUrl: getLinearReconnectUrl(env),
+    };
   }
 
-  const authStatus = authStatusForFailure(result);
-  if (result.reauthorizationRequired && result.reason !== "missing_token") {
-    try {
-      await deleteOAuthToken(env, orgId);
-    } catch (error) {
-      log.warn("oauth.delete_invalid_token_failed", {
-        org_id: orgId,
-        auth_failure_reason: result.reason,
-        error: error instanceof Error ? error : new Error(String(error)),
-      });
-    }
+  if (!existing || existing.status !== "connected") {
+    await recordLinearAuthState(env, {
+      orgId,
+      status: "connected",
+      reason: "client_available",
+      traceId,
+    });
   }
-  await setLinearAuthState(env, {
-    orgId,
-    status: authStatus,
-    reason: result.reason,
-    traceId,
-    details: {
-      oauthStatus: result.status,
-      oauthError: result.oauthError,
-      oauthErrorDescription: result.oauthErrorDescription,
-    },
-  });
-  return {
-    ...result,
-    authStatus,
-    reconnectUrl: getLinearReconnectUrl(env),
-  };
+  return { ok: true, client };
 }
 
 /**

@@ -363,7 +363,6 @@ async function handleCompletionCallback(
         reauthorization_required: clientResult.reauthorizationRequired,
         reconnect_url: clientResult.reconnectUrl,
       });
-      return;
     }
 
     // Fallback: post a comment (requires LINEAR_API_KEY)

@@ -4,7 +4,6 @@ import {
   fetchUser,
   getLinearAuthContext,
   getOAuthTokenOrThrow,
-  getOAuthTokenResult,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
@@ -132,33 +131,14 @@ describe("getOAuthTokenOrThrow", () => {
     });
   });
 
-  it("throws an auth error when the workspace token shape is invalid", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
+  it.each([
+    { name: "non-object JSON", raw: "null" },
+    {
+      name: "missing access token",
+      raw: JSON.stringify({
         refresh_token: "refresh-token",
         expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
-      })
-    );
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "malformed_token",
-    });
-  });
-
-  it("throws an auth error when the token read fails", async () => {
-    const { env } = envWithToken();
-    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
-    kvGet.mockRejectedValueOnce(new Error("kv down"));
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "token_read_error",
-    });
-  });
-
-  it.each([
-    {
-      name: "non-object JSON",
-      raw: "null",
+      }),
     },
     {
       name: "non-string access token",
@@ -184,14 +164,21 @@ describe("getOAuthTokenOrThrow", () => {
         expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
       }),
     },
-  ])("requires reauthorization when the stored token has $name", async ({ raw }) => {
+  ])("throws an auth error when the workspace token has $name", async ({ raw }) => {
     const { env } = envWithToken(raw);
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toMatchObject({
-      ok: false,
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
       reason: "malformed_token",
-      reauthorizationRequired: true,
-      retryable: false,
+    });
+  });
+
+  it("throws an auth error when the token read fails", async () => {
+    const { env } = envWithToken();
+    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
+    kvGet.mockRejectedValueOnce(new Error("kv down"));
+
+    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
+      reason: "token_read_error",
     });
   });
 
@@ -228,10 +215,7 @@ describe("getOAuthTokenOrThrow", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getOAuthTokenResult(env, "org-1")).resolves.toEqual({
-      ok: true,
-      token: "new-access-token",
-    });
+    await expect(getOAuthTokenOrThrow(env, "org-1")).resolves.toBe("new-access-token");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 

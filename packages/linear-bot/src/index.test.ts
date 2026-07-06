@@ -392,8 +392,15 @@ describe("POST /webhook", () => {
     await expect(getLinearAuthState(makeLinearBotEnv(kv), "org-1")).resolves.toBeNull();
   });
 
-  it("rejects stale auth-health webhook payloads before handling them", async () => {
-    const { kv } = createFakeKV();
+  it("acknowledges stale auth-health webhook payloads without handling them", async () => {
+    const { kv, store } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() + 60 * 60 * 1000,
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
     const ctx = makeExecutionContext();
     const payload = {
       type: "OAuthApp",
@@ -402,14 +409,12 @@ describe("POST /webhook", () => {
       webhookTimestamp: Date.now() - 5 * 60 * 1000,
     };
 
-    const res = await app.fetch(
-      await makeWebhookRequest(payload, "delivery-stale"),
-      makeLinearBotEnv(kv),
-      ctx
-    );
+    const res = await app.fetch(await makeWebhookRequest(payload, "delivery-stale"), env, ctx);
 
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "Stale webhook payload" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, skipped: true, reason: "stale_timestamp" });
+    expect(store.has("oauth:token:org-1")).toBe(true);
+    await expect(getLinearAuthState(env, "org-1")).resolves.toBeNull();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
