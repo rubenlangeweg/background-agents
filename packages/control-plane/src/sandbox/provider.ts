@@ -21,8 +21,6 @@ export interface SandboxProviderCapabilities {
   supportsSnapshots: boolean;
   /** Whether the provider supports restoring from snapshots */
   supportsRestore: boolean;
-  /** Whether the provider supports pre-warming sandboxes */
-  supportsWarm: boolean;
   /** Whether the provider can resume a previously stopped sandbox in place */
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
@@ -97,6 +95,12 @@ export interface CreateSandboxResult {
   ttydUrl?: string;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
+  /**
+   * True when the requested repo image failed to restore (e.g. expired
+   * provider-side) and the sandbox booted from the base image instead. The
+   * lifecycle manager marks the image row failed so the cron rebuilds it.
+   */
+  imageRestoreFailed?: boolean;
 }
 
 /**
@@ -151,6 +155,8 @@ export interface RestoreResult {
   providerObjectId?: string;
   /** Error message if failed */
   error?: string;
+  /** Structured failure code (e.g. SNAPSHOT_RESTORE_FAILED_ERROR_CODE). */
+  errorCode?: string;
   /** Code-server tunnel URL (if available) */
   codeServerUrl?: string;
   /** Code-server password (if available) */

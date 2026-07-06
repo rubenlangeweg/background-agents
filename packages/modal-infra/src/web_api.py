@@ -185,6 +185,9 @@ async def api_create_sandbox(
                 "code_server_password": handle.code_server_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                # True when a requested repo image failed to restore and the
+                # sandbox booted from base — the control plane marks the row.
+                "image_restore_failed": bool(getattr(handle, "image_restore_failed", False)),
             },
         }
     except HTTPException as e:
@@ -206,79 +209,6 @@ async def api_create_sandbox(
             duration_ms=duration_ms,
             outcome=outcome,
             endpoint_name="api_create_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id,
-        )
-
-
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_warm_sandbox(
-    request: dict,
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-    x_session_id: str | None = Header(None),
-    x_sandbox_id: str | None = Header(None),
-) -> dict:
-    """
-    HTTP endpoint to warm a sandbox.
-
-    Requires authentication via Authorization header.
-
-    POST body:
-    {
-        "repo_owner": "...",
-        "repo_name": "...",
-        "control_plane_url": "..."
-    }
-    """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
-    try:
-        from .sandbox.manager import SandboxManager
-
-        manager = SandboxManager()
-        handle = await manager.warm_sandbox(
-            repo_owner=request.get("repo_owner"),
-            repo_name=request.get("repo_name"),
-            control_plane_url=control_plane_url,
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "sandbox_id": handle.sandbox_id,
-                "status": handle.status.value,
-            },
-        }
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_warm_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_warm_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_warm_sandbox",
             trace_id=x_trace_id,
             request_id=x_request_id,
             session_id=x_session_id,
@@ -447,9 +377,14 @@ async def api_restore_sandbox(
     if not snapshot_image_id:
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
-    try:
-        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
+    # Imported before the try block so the except clause can name the error type.
+    from .sandbox.manager import (
+        DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        SandboxManager,
+        SnapshotRestoreError,
+    )
 
+    try:
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
@@ -498,6 +433,19 @@ async def api_restore_sandbox(
         outcome = "error"
         http_status = e.status_code
         raise
+    except SnapshotRestoreError as e:
+        # Snapshot expired or was deleted provider-side. Unlike repo images
+        # there is no fallback — surface a structured code so the control
+        # plane can fail the resume with a user-legible error.
+        outcome = "error"
+        http_status = 500
+        log.error("api.snapshot_restore_failed", exc=e, endpoint_name="api_restore_sandbox")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_code": "SNAPSHOT_RESTORE_FAILED",
+            "snapshot_id": e.snapshot_id,
+        }
     except Exception as e:
         outcome = "error"
         http_status = 500

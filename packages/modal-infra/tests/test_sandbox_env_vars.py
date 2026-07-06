@@ -109,6 +109,11 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
+
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
@@ -160,6 +165,11 @@ async def test_restore_uses_default_timeout(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
+
     def fake_from_id(*args, **kwargs):
         return FakeImage()
 
@@ -198,6 +208,11 @@ async def test_restore_uses_custom_timeout(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     def fake_from_id(*args, **kwargs):
         return FakeImage()
@@ -239,6 +254,11 @@ async def test_create_and_restore_timeout_consistency(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     def fake_from_id(*args, **kwargs):
         return FakeImage()
@@ -298,6 +318,11 @@ def _fake_restore_setup(monkeypatch):
 
     class FakeImage:
         object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -464,6 +489,11 @@ async def test_repo_image_boot_omits_fallback_tokens(monkeypatch):
     class FakeImage:
         object_id = "repo-img-1"
 
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
+
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -492,6 +522,11 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
 
     class FakeImage:
         object_id = "repo-img-1"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -540,7 +575,7 @@ async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
-    """A no-repository snapshot boot does not expose fallback VCS credentials."""
+    """A no-repository snapshot boot gets host scoping but no VCS credentials."""
     captured = {}
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
@@ -560,12 +595,68 @@ async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env
     assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
+
+
+@pytest.mark.asyncio
+async def test_no_repo_sandbox_gets_provider_host_scoping(monkeypatch):
+    """No-repository sandboxes still get provider host scoping.
+
+    Without VCS_HOST, a GitLab/Bitbucket deployment's repo-less sandboxes
+    fall back to github.com credential-helper behavior.
+    """
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "gitlab")
+
+    manager = SandboxManager()
+    await manager.create_sandbox(SandboxConfig(repo_owner=None, repo_name=None))
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "gitlab.com"
+    assert env["VCS_CLONE_USERNAME"] == "oauth2"
+    assert "VCS_CLONE_TOKEN" not in env
+
+
+@pytest.mark.asyncio
+async def test_restore_no_repo_gets_host_scoping_without_tokens(monkeypatch):
+    """No-repository snapshot restores get host scoping but never a clone token."""
+    captured = {}
+
+    class FakeImage:
+        object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+    monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
+
+    manager = SandboxManager()
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "session_id": "sess-1",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+        clone_token="bb_token_xyz",
+    )
+
+    env = captured["env"]
+    assert env["VCS_HOST"] == "bitbucket.org"
+    assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
+    assert "VCS_CLONE_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "GITHUB_APP_TOKEN" not in env
 
 
 @pytest.mark.asyncio
@@ -582,6 +673,11 @@ async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatc
 
     class FakeImage:
         object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -619,6 +715,11 @@ async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
     class FakeImage:
         object_id = "img-123"
 
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
+
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
@@ -648,11 +749,16 @@ async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_repo_restore_omits_clone_token(monkeypatch):
-    """No-repository snapshot restores must not expose VCS credentials."""
+    """No-repository snapshot restores get host scoping but no VCS credentials."""
     captured = {}
 
     class FakeImage:
         object_id = "img-123"
+
+        class hydrate:
+            @staticmethod
+            async def aio() -> None:
+                return None
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -675,8 +781,8 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env

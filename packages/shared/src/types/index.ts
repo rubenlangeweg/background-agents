@@ -8,13 +8,15 @@ export { attachmentSchema, clientMessageSchema } from "./websocket";
 export type { Attachment, ClientMessage } from "./websocket";
 
 // Session states
-export type SessionStatus =
-  | "created"
-  | "active"
-  | "completed"
-  | "failed"
-  | "archived"
-  | "cancelled";
+export const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type SandboxStatus =
   | "pending"
   | "spawning"
@@ -33,6 +35,7 @@ export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" 
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"
+  | "ready"
   | "token"
   | "tool_call"
   | "step_start"
@@ -55,14 +58,6 @@ export type SpawnSource =
   | "slack-bot";
 export type ConfidenceLevel = "high" | "medium" | "low";
 
-const sessionStatusSchema = z.enum([
-  "created",
-  "active",
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-]);
 const sandboxStatusSchema = z.enum([
   "pending",
   "spawning",
@@ -88,6 +83,32 @@ const spawnSourceSchema = z.enum([
 ]);
 
 const recordSchema = z.record(z.string(), z.unknown());
+const tokenUsageDetailsSchema = z
+  .object({
+    total: z.number().optional(),
+    input: z.number().optional(),
+    output: z.number().optional(),
+    reasoning: z.number().optional(),
+    cache: z
+      .object({
+        read: z.number().optional(),
+        write: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+  .refine(
+    (usage) =>
+      typeof usage.total === "number" ||
+      typeof usage.input === "number" ||
+      typeof usage.output === "number" ||
+      typeof usage.reasoning === "number" ||
+      typeof usage.cache?.read === "number" ||
+      typeof usage.cache?.write === "number",
+    { message: "Expected at least one token usage count" }
+  );
+const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
 
 // Participant in a session
 export interface SessionParticipant {
@@ -251,6 +272,12 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     type: z.literal("heartbeat"),
     status: z.string(),
   }),
+  sandboxEventBaseSchema.extend({
+    // Emitted once when the sandbox bridge connects and OpenCode is ready.
+    // Present in essentially every session's replay history.
+    type: z.literal("ready"),
+    opencodeSessionId: z.string().nullable().optional(),
+  }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),
     content: z.string(),
@@ -270,7 +297,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
     cost: z.number().optional(),
-    tokens: z.number().optional(),
+    tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
   }),
@@ -338,6 +365,22 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+
+/**
+ * Sandbox event arrays for session hydration — both the initial `subscribed`
+ * replay and paginated `history_page` items, which read from the same event
+ * store. Resilient to unknown/legacy event shapes: each event is validated
+ * individually and dropped if it doesn't match, instead of failing the whole
+ * message. A single unrecognized event (e.g. a legacy type no longer in the
+ * schema) must never wedge session hydration and strand the client on
+ * "loading session" forever.
+ */
+const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
+  events.flatMap((event) => {
+    const result = sandboxEventSchema.safeParse(event);
+    return result.success ? [result.data] : [];
+  })
+);
 
 // WebSocket message types
 // Session state sent to clients
@@ -427,7 +470,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     participant: participantSummarySchema.optional(),
     replay: z
       .object({
-        events: z.array(sandboxEventSchema),
+        events: tolerantSandboxEventsSchema,
         hasMore: z.boolean(),
         cursor: historyCursorSchema.nullable(),
       })
@@ -455,7 +498,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("processing_status"), isProcessing: z.boolean() }),
   z.object({
     type: z.literal("history_page"),
-    items: z.array(sandboxEventSchema),
+    items: tolerantSandboxEventsSchema,
     hasMore: z.boolean(),
     cursor: historyCursorSchema.nullable(),
   }),
@@ -721,10 +764,19 @@ export const createMediaArtifactRequestSchema = z.object({
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
 
-export interface CreateSessionResponse {
-  sessionId: string;
-  status: SessionStatus;
-}
+export const createSessionResponseSchema = z.object({
+  sessionId: z.string().min(1),
+  status: sessionStatusSchema,
+});
+
+export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
+
+export const sendPromptResponseSchema = z.object({
+  messageId: z.string().min(1),
+  status: z.literal("queued").optional(),
+});
+
+export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;
 
 export interface ListSessionsResponse {
   sessions: Session[];
@@ -870,6 +922,90 @@ export type AutomationRunStatus = "starting" | "running" | "completed" | "failed
 // Re-export TriggerConfig for use in automation interfaces below
 import type { TriggerConfig } from "../triggers/conditions";
 
+/** Maximum repositories an automation can fan out across per invocation. */
+export const MAX_AUTOMATION_REPOSITORIES = 10;
+
+export interface RepositoryPair {
+  repoOwner: string;
+  repoName: string;
+}
+
+export class RepositoryPairValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositoryPairValidationError";
+  }
+}
+
+/**
+ * Normalize an optional repository pair: trim + lowercase identifiers, map a
+ * blank pair to null. The single write-side normalization for scalar repo
+ * pairs — routes, stores, and resolvers must not roll their own.
+ *
+ * @throws RepositoryPairValidationError when only one identifier is present.
+ */
+export function normalizeOptionalRepositoryPair(
+  input: { repoOwner?: string | null; repoName?: string | null },
+  partialMessage = "repoOwner and repoName must be provided together"
+): RepositoryPair | null {
+  const repoOwner = input.repoOwner?.trim().toLowerCase() || null;
+  const repoName = input.repoName?.trim().toLowerCase() || null;
+
+  if ((repoOwner === null) !== (repoName === null)) {
+    throw new RepositoryPairValidationError(partialMessage);
+  }
+
+  return repoOwner && repoName ? { repoOwner, repoName } : null;
+}
+
+/** A repository selected on an automation (response shape, resolved). */
+export interface AutomationRepository {
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string | null;
+}
+
+/**
+ * One repository entry on a create/update request. Identifiers are normalized
+ * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
+ * the list-entry twin of that scalar helper.
+ */
+export const automationRepositoryInputSchema = z
+  .object({
+    repoOwner: z.string().trim().min(1),
+    repoName: z.string().trim().min(1),
+    baseBranch: z.string().trim().min(1).nullish(),
+  })
+  .transform((entry) => ({
+    repoOwner: entry.repoOwner.toLowerCase(),
+    repoName: entry.repoName.toLowerCase(),
+    baseBranch: entry.baseBranch ?? null,
+  }));
+
+export type AutomationRepositoryInput = z.input<typeof automationRepositoryInputSchema>;
+
+/** Repository list for create/update requests: bounded and duplicate-free. */
+export const automationRepositoriesInputSchema = z
+  .array(automationRepositoryInputSchema)
+  .max(MAX_AUTOMATION_REPOSITORIES, {
+    message: `repositories must contain at most ${MAX_AUTOMATION_REPOSITORIES} entries`,
+  })
+  .superRefine((repositories, ctx) => {
+    const seen = new Set<string>();
+    repositories.forEach((repository, index) => {
+      const key = `${repository.repoOwner}/${repository.repoName}`;
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate repository: ${key}`,
+          path: [index],
+        });
+      }
+      seen.add(key);
+    });
+  });
+
 export interface Automation {
   id: string;
   name: string;
@@ -888,10 +1024,8 @@ export interface Automation {
   deletedAt: number | null;
   eventType: string | null;
   triggerConfig: TriggerConfig | null;
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-  repoId: number | null;
+  /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
+  repositories: AutomationRepository[];
 }
 
 export interface CreateAutomationRequest {
@@ -905,28 +1039,28 @@ export interface CreateAutomationRequest {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
-  repoOwner?: string | null;
-  repoName?: string | null;
-  baseBranch?: string | null;
+  /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
+  repositories?: AutomationRepositoryInput[];
 }
 
 export interface UpdateAutomationRequest {
   name?: string;
   instructions?: string;
-  repoOwner?: string | null;
-  repoName?: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
   model?: string;
   reasoningEffort?: string | null;
-  baseBranch?: string | null;
   eventType?: string;
   triggerConfig?: TriggerConfig;
+  /** Replaces the full repository selection when present. */
+  repositories?: AutomationRepositoryInput[];
 }
 
 export interface AutomationRun {
   id: string;
   automationId: string;
+  /** The firing this run belongs to. Never null after the 0030 backfill. */
+  invocationId: string | null;
   sessionId: string | null;
   status: AutomationRunStatus;
   skipReason: string | null;
@@ -937,8 +1071,14 @@ export interface AutomationRun {
   createdAt: number;
   sessionTitle: string | null;
   artifactSummary: string | null;
-  triggerKey: string | null;
-  concurrencyKey: string | null;
+  /**
+   * Repository snapshot taken at firing time — history never depends on the
+   * live selection. Null for repo-less runs and legacy session-less rows.
+   */
+  repoOwner: string | null;
+  repoName: string | null;
+  repoId: number | null;
+  baseBranch: string | null;
 }
 
 export interface ListAutomationsResponse {
@@ -946,8 +1086,40 @@ export interface ListAutomationsResponse {
   total: number;
 }
 
-export interface ListAutomationRunsResponse {
+export type AutomationInvocationSource = "schedule" | "manual" | "event";
+
+/**
+ * Derived from an invocation's child runs — never stored. Zero children ⇔
+ * skipped; `partial_failed` means the runs finished terminal with a mix of
+ * completed and failed.
+ */
+export type AutomationInvocationStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial_failed"
+  | "skipped";
+
+/** One firing of an automation: 0 runs when skipped, else one run per repository. */
+export interface AutomationInvocation {
+  id: string;
+  automationId: string;
+  status: AutomationInvocationStatus;
+  source: AutomationInvocationSource;
+  /** The cron slot this firing served; null for manual/event firings. */
+  scheduledAt: number | null;
+  /** Non-null ⇔ this firing was skipped (runs is then empty). */
+  skipReason: string | null;
+  createdAt: number;
+  /** Latest child completion; null until all runs are terminal. */
+  completedAt: number | null;
   runs: AutomationRun[];
+}
+
+export interface ListAutomationInvocationsResponse {
+  invocations: AutomationInvocation[];
+  /** Counts invocations (each firing is one row regardless of fan-out width). */
   total: number;
 }
 

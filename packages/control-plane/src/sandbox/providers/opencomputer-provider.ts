@@ -19,6 +19,7 @@ import {
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
   OpenComputerApiError,
   OpenComputerNotFoundError,
+  type OpenComputerDeleteSandboxOptions,
   type OpenComputerRestClient,
   type OpenComputerSandboxResponse,
   type OpenComputerSecretStoreResponse,
@@ -90,7 +91,6 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSnapshots: true,
     supportsRestore: true,
-    supportsWarm: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
   };
@@ -342,9 +342,12 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
    * single-use build sandbox. Idempotent — a missing sandbox is treated as
    * already deleted.
    */
-  async deleteSandbox(providerObjectId: string): Promise<void> {
+  async deleteSandbox(
+    providerObjectId: string,
+    options?: OpenComputerDeleteSandboxOptions
+  ): Promise<void> {
     try {
-      await this.client.deleteSandbox(providerObjectId);
+      await this.client.deleteSandbox(providerObjectId, options);
     } catch (error) {
       if (error instanceof OpenComputerNotFoundError) return;
       throw this.classifyError("Failed to delete OpenComputer sandbox", error);

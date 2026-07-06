@@ -94,7 +94,6 @@ describe("OpenComputerSandboxProvider", () => {
     expect(provider.capabilities).toEqual({
       supportsSnapshots: true,
       supportsRestore: true,
-      supportsWarm: false,
       supportsPersistentResume: true,
       supportsExplicitStop: true,
     });
@@ -295,10 +294,24 @@ describe("OpenComputerSandboxProvider", () => {
     });
 
     await provider.deleteSandbox("oc-build-1");
-    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-build-1");
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-build-1", undefined);
 
     vi.mocked(client.deleteSandbox).mockRejectedValueOnce(new OpenComputerNotFoundError("gone"));
     await expect(provider.deleteSandbox("oc-build-2")).resolves.toBeUndefined();
+  });
+
+  it("can request attached secret-store cleanup when deleting a sandbox", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.deleteSandbox("oc-build-1", { deleteSecretStore: true });
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-build-1", {
+      deleteSecretStore: true,
+    });
   });
 
   it("derives a unique secret-store name per sandbox", async () => {
