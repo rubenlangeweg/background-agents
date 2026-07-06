@@ -28,7 +28,7 @@ export interface Env {
 
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
-  LINEAR_API_KEY?: string; // kept for backward compat / fallback
+  LINEAR_API_KEY?: string; // kept for backward-compatible completion fallback
   ANTHROPIC_API_KEY: string;
   INTERNAL_CALLBACK_SECRET?: string;
   LOG_LEVEL?: string;
@@ -57,31 +57,6 @@ export type LinearWorkspaceAuthStatus =
   | "reauthorization_required"
   | "transient_failure";
 
-export type LinearAuthNotificationOutcome = "attempting" | "sent" | "unavailable" | "failed";
-
-export type LinearAuthNotificationFailureReason =
-  | "missing_linear_api_key"
-  | "linear_api_rejected"
-  | "post_exception";
-
-export interface LinearAuthNotificationState {
-  fingerprint: string;
-  attemptId?: string;
-  issueId?: string;
-  issueIdentifier?: string;
-  agentSessionId?: string;
-  delivery: "comment_fallback";
-  outcome: LinearAuthNotificationOutcome;
-  failureReason?: LinearAuthNotificationFailureReason;
-  traceId?: string;
-  attemptedAt: number;
-  leaseExpiresAt?: number;
-  completedAt?: number;
-  lastSuppressedAt?: number;
-  suppressedCount?: number;
-  httpStatus?: number;
-}
-
 export interface LinearWorkspaceAuthState {
   schemaVersion: 1;
   orgId: string;
@@ -106,7 +81,6 @@ export interface LinearWorkspaceAuthState {
     connectedAt?: number;
     lastConnectedAt?: number;
   };
-  lastNotification?: LinearAuthNotificationState;
 }
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────

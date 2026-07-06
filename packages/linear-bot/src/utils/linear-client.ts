@@ -2,18 +2,17 @@
  * Linear API client utilities — OAuth + raw GraphQL.
  */
 
-import type { Env, OAuthTokenResponse, StoredTokenData, LinearIssueDetails } from "../types";
+import type {
+  Env,
+  OAuthTokenResponse,
+  StoredTokenData,
+  LinearIssueDetails,
+  LinearWorkspaceAuthStatus,
+} from "../types";
 import { timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./crypto";
 import { createLogger } from "../logger";
-import {
-  beginLinearAuthNotification,
-  buildLinearAuthNotificationFingerprint,
-  completeLinearAuthNotification,
-  getLinearAuthState,
-  setLinearAuthState,
-} from "../kv-store";
-import type { LinearWorkspaceAuthStatus } from "../types";
+import { getLinearAuthState, setLinearAuthState } from "../kv-store";
 
 const log = createLogger("linear-client");
 
@@ -433,77 +432,6 @@ export async function getLinearAuthContext(
   };
 }
 
-export async function postAuthFailureCommentFallback(
-  env: Env,
-  params: {
-    orgId: string;
-    issueId: string;
-    issueIdentifier?: string;
-    agentSessionId?: string;
-    traceId?: string;
-    status: LinearWorkspaceAuthStatus;
-    reason: string;
-    body: string;
-  }
-): Promise<{
-  outcome: "sent" | "unavailable" | "failed" | "suppressed";
-  success: boolean;
-}> {
-  const fingerprint = buildLinearAuthNotificationFingerprint({
-    orgId: params.orgId,
-    issueId: params.issueId,
-    status: params.status,
-    reason: params.reason,
-  });
-  const started = await beginLinearAuthNotification(env, {
-    orgId: params.orgId,
-    fingerprint,
-    issueId: params.issueId,
-    issueIdentifier: params.issueIdentifier,
-    agentSessionId: params.agentSessionId,
-    traceId: params.traceId,
-  });
-  if (started.suppressed) return { outcome: "suppressed", success: false };
-
-  if (!env.LINEAR_API_KEY) {
-    await completeLinearAuthNotification(env, {
-      orgId: params.orgId,
-      fingerprint,
-      attemptId: started.attemptId,
-      outcome: "unavailable",
-      failureReason: "missing_linear_api_key",
-    });
-    return { outcome: "unavailable", success: false };
-  }
-
-  try {
-    const result = await postIssueComment(env.LINEAR_API_KEY, params.issueId, params.body);
-    await completeLinearAuthNotification(env, {
-      orgId: params.orgId,
-      fingerprint,
-      attemptId: started.attemptId,
-      outcome: result.success ? "sent" : "failed",
-      failureReason: result.success ? undefined : "linear_api_rejected",
-      httpStatus: result.status,
-    });
-    return { outcome: result.success ? "sent" : "failed", success: result.success };
-  } catch (error) {
-    await completeLinearAuthNotification(env, {
-      orgId: params.orgId,
-      fingerprint,
-      attemptId: started.attemptId,
-      outcome: "failed",
-      failureReason: "post_exception",
-    });
-    log.error("linear.auth_failure_comment_fallback_exception", {
-      org_id: params.orgId,
-      issue_id: params.issueId,
-      error: error instanceof Error ? error : new Error(String(error)),
-    });
-    return { outcome: "failed", success: false };
-  }
-}
-
 /**
  * Execute a GraphQL query against the Linear API.
  */
@@ -766,7 +694,7 @@ export async function postIssueComment(
   apiKey: string,
   issueId: string,
   body: string
-): Promise<{ success: boolean; status?: number }> {
+): Promise<{ success: boolean }> {
   const response = await fetch(LINEAR_API_URL, {
     method: "POST",
     headers: {
@@ -783,11 +711,11 @@ export async function postIssueComment(
     }),
   });
 
-  if (!response.ok) return { success: false, status: response.status };
+  if (!response.ok) return { success: false };
   const result = (await response.json()) as {
     data?: { commentCreate?: { success: boolean } };
   };
-  return { success: result.data?.commentCreate?.success ?? false, status: response.status };
+  return { success: result.data?.commentCreate?.success ?? false };
 }
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────

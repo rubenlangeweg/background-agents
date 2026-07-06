@@ -8,11 +8,9 @@ import type { Env, CompletionCallback, ToolCallCallback } from "./types";
 import {
   getLinearAuthContext,
   emitAgentActivity,
-  postAuthFailureCommentFallback,
   postIssueComment,
   updateAgentSession,
 } from "./utils/linear-client";
-import type { LinearAuthContext } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName, timingSafeEqual } from "@open-inspect/shared";
 import { computeHmacHex } from "./utils/crypto";
@@ -38,35 +36,6 @@ export function formatCompletionComment(
   return success
     ? `## 🤖 ${appName} completed\n\n${message}`
     : `## ⚠️ ${appName} encountered an issue\n\n${message}`;
-}
-
-type CompletionAuthFailure = Extract<LinearAuthContext, { ok: false }>;
-
-function formatCompletionAuthFailureComment(params: {
-  appName: string;
-  success: boolean;
-  message: string;
-  authFailure: CompletionAuthFailure;
-  traceId?: string;
-}): string {
-  const appName = params.appName;
-  const reason = params.authFailure.reauthorizationRequired
-    ? "the Linear workspace authorization is no longer valid"
-    : `${appName} could not verify the Linear workspace authorization`;
-  const nextStep = params.authFailure.reauthorizationRequired
-    ? `Please re-authorize ${appName} for this workspace:`
-    : `Please retry if this was a temporary Linear auth failure. If it continues, re-authorize ${appName} for this workspace:`;
-
-  return [
-    formatCompletionComment(appName, params.success, params.message),
-    "",
-    "---",
-    `${appName} could not update the Linear agent session because ${reason}.`,
-    "",
-    nextStep,
-    params.authFailure.reconnectUrl,
-    ...(params.traceId ? ["", `Trace ID: ${params.traceId}`] : []),
-  ].join("\n");
 }
 
 export function isValidPayload(payload: unknown): payload is CompletionCallback {
@@ -270,6 +239,7 @@ callbacksRouter.post("/tool_call", async (c) => {
           auth_failure_reason: clientResult.reason,
           auth_status: clientResult.authStatus,
           reauthorization_required: clientResult.reauthorizationRequired,
+          reconnect_url: clientResult.reconnectUrl,
           duration_ms: Date.now() - processStart,
         });
         return;
@@ -391,37 +361,7 @@ async function handleCompletionCallback(
         auth_failure_reason: clientResult.reason,
         auth_status: clientResult.authStatus,
         reauthorization_required: clientResult.reauthorizationRequired,
-      });
-
-      const commentBody = formatCompletionAuthFailureComment({
-        appName: resolveAppName(env),
-        success: payload.success,
-        message,
-        authFailure: clientResult,
-        traceId,
-      });
-      const fallback = await postAuthFailureCommentFallback(env, {
-        orgId: context.organizationId,
-        issueId: context.issueId,
-        issueIdentifier: context.issueIdentifier,
-        agentSessionId: context.agentSessionId,
-        traceId,
-        status: clientResult.authStatus,
-        reason: clientResult.reason,
-        body: commentBody,
-      });
-
-      log.info("callback.complete", {
-        trace_id: traceId,
-        session_id: sessionId,
-        issue_id: context.issueId,
-        issue_identifier: context.issueIdentifier,
-        agent_session_id: context.agentSessionId,
-        outcome: payload.success ? "success" : "failed",
-        agent_success: payload.success,
-        delivery: "comment_fallback",
-        delivery_outcome: fallback.outcome,
-        duration_ms: Date.now() - startTime,
+        reconnect_url: clientResult.reconnectUrl,
       });
       return;
     }

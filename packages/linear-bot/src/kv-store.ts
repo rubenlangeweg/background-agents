@@ -9,9 +9,6 @@ import type {
   ProjectRepoMapping,
   UserPreferences,
   IssueSession,
-  LinearAuthNotificationFailureReason,
-  LinearAuthNotificationOutcome,
-  LinearAuthNotificationState,
   LinearWorkspaceAuthState,
   LinearWorkspaceAuthStatus,
 } from "./types";
@@ -27,7 +24,6 @@ const EVENT_DEDUP_TTL_MS = 60 * 60 * SECOND_MS;
 export const OAUTH_STATE_TTL_MS = 10 * 60 * SECOND_MS;
 const OAUTH_STATE_SCOPE = "linear_oauth_state";
 const OAUTH_STATE_TOKEN_PREFIX = "linear_oauth_state_v1";
-export const LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS = 5 * 60 * SECOND_MS;
 
 export const DEFAULT_TRIGGER_CONFIG: TriggerConfig = {
   triggerLabel: "agent",
@@ -197,154 +193,9 @@ export async function setLinearAuthState(
     ...(params.traceId ? { lastTraceId: params.traceId } : {}),
     ...(params.details ? { details: params.details } : {}),
     ...(installation ? { installation } : {}),
-    ...(params.status !== "connected" && existing?.lastNotification
-      ? { lastNotification: existing.lastNotification }
-      : {}),
   };
   await env.LINEAR_KV.put(getLinearAuthStateKey(params.orgId), JSON.stringify(state));
   return state;
-}
-
-export function buildLinearAuthNotificationFingerprint(params: {
-  orgId: string;
-  issueId: string;
-  status: LinearWorkspaceAuthStatus;
-  reason: string;
-}): string {
-  return `auth_failure:v1:${params.orgId}:${params.issueId}:${params.status}:${params.reason}`;
-}
-
-function isLeasedLinearAuthNotificationAttempt(
-  notification: LinearAuthNotificationState | undefined,
-  fingerprint: string,
-  now: number,
-  attemptId?: string
-): notification is LinearAuthNotificationState & { attemptId: string; leaseExpiresAt: number } {
-  if (
-    !notification ||
-    notification.fingerprint !== fingerprint ||
-    notification.outcome !== "attempting" ||
-    !notification.attemptId ||
-    !notification.leaseExpiresAt ||
-    notification.leaseExpiresAt <= now
-  ) {
-    return false;
-  }
-  return !attemptId || notification.attemptId === attemptId;
-}
-
-async function putLinearAuthNotification(
-  env: Env,
-  orgId: string,
-  notification: LinearAuthNotificationState
-): Promise<void> {
-  const existing = await getLinearAuthState(env, orgId);
-  const state: LinearWorkspaceAuthState = {
-    schemaVersion: 1,
-    orgId,
-    status: existing?.status ?? "reauthorization_required",
-    reason: existing?.reason ?? "notification_recorded",
-    updatedAt: existing?.updatedAt ?? Date.now(),
-    ...(existing?.lastTraceId ? { lastTraceId: existing.lastTraceId } : {}),
-    ...(existing?.details ? { details: existing.details } : {}),
-    ...(existing?.installation ? { installation: existing.installation } : {}),
-    lastNotification: notification,
-  };
-  await env.LINEAR_KV.put(getLinearAuthStateKey(orgId), JSON.stringify(state));
-}
-
-export async function beginLinearAuthNotification(
-  env: Env,
-  params: {
-    orgId: string;
-    fingerprint: string;
-    issueId?: string;
-    issueIdentifier?: string;
-    agentSessionId?: string;
-    traceId?: string;
-  }
-): Promise<{ suppressed: true; attemptId?: string } | { suppressed: false; attemptId: string }> {
-  const existing = await getLinearAuthState(env, params.orgId);
-  const previous = existing?.lastNotification;
-  const now = Date.now();
-  const previousAttemptActive = isLeasedLinearAuthNotificationAttempt(
-    previous,
-    params.fingerprint,
-    now
-  );
-  if (
-    previous?.fingerprint === params.fingerprint &&
-    (previousAttemptActive || previous.outcome === "sent")
-  ) {
-    await putLinearAuthNotification(env, params.orgId, {
-      ...previous,
-      lastSuppressedAt: now,
-      suppressedCount: (previous.suppressedCount ?? 0) + 1,
-      traceId: params.traceId ?? previous.traceId,
-    });
-    return previousAttemptActive
-      ? { suppressed: true, attemptId: previous.attemptId }
-      : { suppressed: true };
-  }
-
-  const attemptId = crypto.randomUUID();
-  await putLinearAuthNotification(env, params.orgId, {
-    fingerprint: params.fingerprint,
-    attemptId,
-    issueId: params.issueId,
-    issueIdentifier: params.issueIdentifier,
-    agentSessionId: params.agentSessionId,
-    delivery: "comment_fallback",
-    outcome: "attempting",
-    traceId: params.traceId,
-    attemptedAt: now,
-    leaseExpiresAt: now + LINEAR_AUTH_NOTIFICATION_ATTEMPT_LEASE_MS,
-  });
-  return { suppressed: false, attemptId };
-}
-
-export async function completeLinearAuthNotification(
-  env: Env,
-  params: {
-    orgId: string;
-    fingerprint: string;
-    attemptId: string;
-    outcome: Exclude<LinearAuthNotificationOutcome, "attempting">;
-    failureReason?: LinearAuthNotificationFailureReason;
-    httpStatus?: number;
-  }
-): Promise<void> {
-  const existing = await getLinearAuthState(env, params.orgId);
-  const previous = existing?.lastNotification;
-  const now = Date.now();
-  if (
-    !params.attemptId ||
-    !isLeasedLinearAuthNotificationAttempt(previous, params.fingerprint, now, params.attemptId)
-  ) {
-    log.debug("kv.complete_linear_auth_notification_stale", {
-      org_id: params.orgId,
-      fingerprint: params.fingerprint,
-      attempt_id: params.attemptId,
-    });
-    return;
-  }
-
-  await putLinearAuthNotification(env, params.orgId, {
-    fingerprint: params.fingerprint,
-    attemptId: previous.attemptId,
-    issueId: previous?.issueId,
-    issueIdentifier: previous?.issueIdentifier,
-    agentSessionId: previous?.agentSessionId,
-    delivery: "comment_fallback",
-    outcome: params.outcome,
-    failureReason: params.failureReason,
-    traceId: previous?.traceId,
-    attemptedAt: previous?.attemptedAt ?? now,
-    completedAt: now,
-    suppressedCount: previous?.suppressedCount,
-    lastSuppressedAt: previous?.lastSuppressedAt,
-    httpStatus: params.httpStatus,
-  });
 }
 
 // ─── OAuth State ────────────────────────────────────────────────────────────

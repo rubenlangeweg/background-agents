@@ -14,10 +14,12 @@ describe("callbacksRouter auth health", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("records auth health when a tool-call callback cannot refresh Linear OAuth", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { kv } = createFakeKV({
       "oauth:token:org-1": JSON.stringify({
         access_token: "expired-token",
@@ -78,9 +80,19 @@ describe("callbacksRouter auth health", () => {
       status: "reauthorization_required",
       reason: "refresh_invalid_grant",
     });
+    const warnEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(warnEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "callback.tool_call",
+        skip_reason: "no_oauth_token",
+        auth_failure_reason: "refresh_invalid_grant",
+        reconnect_url: "https://linear-bot.example.test/oauth/authorize",
+      })
+    );
   });
 
-  it("records auth health and fallback notification when completion callback cannot refresh OAuth", async () => {
+  it("records auth health when completion callback cannot refresh OAuth", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { kv } = createFakeKV({
       "oauth:token:org-1": JSON.stringify({
         access_token: "expired-token",
@@ -125,7 +137,6 @@ describe("callbacksRouter auth health", () => {
       APP_NAME: "Acme Agent",
       CONTROL_PLANE: { fetch: controlPlaneFetch } as unknown as Fetcher,
       INTERNAL_CALLBACK_SECRET: "callback-secret",
-      LINEAR_API_KEY: "linear-api-key",
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
@@ -140,13 +151,6 @@ describe("callbacksRouter auth health", () => {
                 error_description: "Refresh token has expired.",
               })
             ),
-        };
-      }
-      if (url === "https://api.linear.app/graphql") {
-        return {
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
         };
       }
       throw new Error(`Unexpected fetch to ${url}`);
@@ -185,33 +189,24 @@ describe("callbacksRouter auth health", () => {
 
     expect(res.status).toBe(200);
     await Promise.all(ctx.waitUntil.mock.calls.map(([promise]) => promise));
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+    const authState = await getLinearAuthState(env, "org-1");
+    expect(authState).toMatchObject({
       status: "reauthorization_required",
       reason: "refresh_invalid_grant",
-      lastNotification: {
-        issueId: "issue-1",
-        issueIdentifier: "ORI-229",
-        agentSessionId: "agent-session-1",
-        outcome: "sent",
-      },
     });
-    const commentCall = fetchMock.mock.calls.find(
-      ([input]) => String(input) === "https://api.linear.app/graphql"
+    expect(authState).not.toHaveProperty("lastNotification");
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");
+    expect(
+      fetchMock.mock.calls.find(([input]) => String(input) === "https://api.linear.app/graphql")
+    ).toBeUndefined();
+    const warnEvents = warnSpy.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(warnEvents).toContainEqual(
+      expect.objectContaining({
+        msg: "callback.no_oauth_token",
+        auth_failure_reason: "refresh_invalid_grant",
+        reconnect_url: "https://linear-bot.example.test/oauth/authorize",
+      })
     );
-    expect(commentCall).toBeDefined();
-    const commentBody = JSON.parse(String((commentCall?.[1] as RequestInit).body)) as {
-      variables: { input: { body: string } };
-    };
-    expect(commentBody.variables.input.body).toContain("Acme Agent completed");
-    expect(commentBody.variables.input.body).toContain(
-      "Acme Agent could not update the Linear agent session"
-    );
-    expect(commentBody.variables.input.body).toContain(
-      "Please re-authorize Acme Agent for this workspace"
-    );
-    expect(commentBody.variables.input.body).toContain(
-      "https://linear-bot.example.test/oauth/authorize"
-    );
-    expect(commentBody.variables.input.body).not.toContain("Open-Inspect");
   });
 });

@@ -5,7 +5,6 @@ import {
   getLinearAuthContext,
   getOAuthTokenOrThrow,
   getOAuthTokenResult,
-  postAuthFailureCommentFallback,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
@@ -564,83 +563,6 @@ describe("getLinearAuthContext", () => {
       reason: "client_available",
       lastTraceId: "trace-connected",
     });
-  });
-});
-
-describe("postAuthFailureCommentFallback", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("records rejected fallback comments as failed notifications with HTTP status", async () => {
-    const { kv } = createFakeKV();
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    await getLinearAuthContext(env, "org-1", "trace-1");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 403,
-      })
-    );
-
-    await expect(
-      postAuthFailureCommentFallback(env, {
-        orgId: "org-1",
-        issueId: "issue-1",
-        issueIdentifier: "ORI-229",
-        agentSessionId: "agent-session-1",
-        traceId: "trace-1",
-        status: "reauthorization_required",
-        reason: "missing_token",
-        body: "Reconnect Open-Inspect.",
-      })
-    ).resolves.toEqual({ outcome: "failed", success: false });
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      lastNotification: {
-        issueId: "issue-1",
-        issueIdentifier: "ORI-229",
-        agentSessionId: "agent-session-1",
-        outcome: "failed",
-        failureReason: "linear_api_rejected",
-        httpStatus: 403,
-      },
-    });
-  });
-
-  it("records fallback comment exceptions as failed notifications", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { kv } = createFakeKV();
-    const env = makeLinearBotEnv(kv, { LINEAR_API_KEY: "linear-api-key" });
-    await getLinearAuthContext(env, "org-1", "trace-1");
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network unavailable")));
-
-    await expect(
-      postAuthFailureCommentFallback(env, {
-        orgId: "org-1",
-        issueId: "issue-1",
-        issueIdentifier: "ORI-229",
-        agentSessionId: "agent-session-1",
-        traceId: "trace-1",
-        status: "reauthorization_required",
-        reason: "missing_token",
-        body: "Reconnect Open-Inspect.",
-      })
-    ).resolves.toEqual({ outcome: "failed", success: false });
-    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
-      lastNotification: {
-        issueId: "issue-1",
-        issueIdentifier: "ORI-229",
-        agentSessionId: "agent-session-1",
-        outcome: "failed",
-        failureReason: "post_exception",
-      },
-    });
-    errorSpy.mockRestore();
   });
 });
 
