@@ -107,6 +107,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          repositories: config.repositories,
         },
         config.correlation
       );
@@ -149,6 +150,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalRepoImageBuil
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          repositories: config.repositories,
         },
         config.correlation
       );
