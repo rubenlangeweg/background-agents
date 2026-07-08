@@ -83,6 +83,18 @@ export interface LinearWorkspaceAuthState {
   };
 }
 
+export type LinearAuthHealthStatus = LinearWorkspaceAuthStatus | "unknown" | "unavailable";
+
+export interface LinearAuthHealthResponse {
+  status: LinearAuthHealthStatus;
+  reconnectUrl: string;
+  orgId?: string;
+  orgName?: string;
+  reason?: string;
+  updatedAt?: number;
+  lastTraceId?: string;
+}
+
 // ─── Repo / Config Types ─────────────────────────────────────────────────────
 
 /**

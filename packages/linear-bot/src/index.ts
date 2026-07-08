@@ -11,6 +11,7 @@ import {
   buildOAuthAuthorizeUrl,
   deleteOAuthToken,
   exchangeCodeForToken,
+  getLinearReconnectUrl,
   verifyLinearWebhook,
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
@@ -23,6 +24,7 @@ import {
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import {
   consumeOAuthState,
+  getLinearAuthHealthResponse,
   getLinearAuthState,
   getTeamRepoMapping,
   getProjectRepoMapping,
@@ -139,6 +141,13 @@ function readPermissionChangeDetails(payload: Record<string, unknown>): {
   };
 }
 
+function latestConnectedAt(state: Awaited<ReturnType<typeof getLinearAuthState>>): number | null {
+  const candidate =
+    state?.installation?.lastConnectedAt ??
+    (state?.status === "connected" ? state.updatedAt : null);
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
+}
+
 async function handleAuthHealthWebhook(params: {
   env: Env;
   payload: Record<string, unknown>;
@@ -146,8 +155,9 @@ async function handleAuthHealthWebhook(params: {
   action: string;
   traceId: string;
   deliveryId: string;
+  webhookTimestamp: number;
 }) {
-  const { env, payload, eventType, action, traceId, deliveryId } = params;
+  const { env, payload, eventType, action, traceId, deliveryId, webhookTimestamp } = params;
   const orgId = readOrganizationId(payload);
   if (!orgId) {
     log.warn("webhook.invalid_payload", {
@@ -165,6 +175,23 @@ async function handleAuthHealthWebhook(params: {
   }
 
   if (eventType === "OAuthApp") {
+    const existing = await getLinearAuthState(env, orgId);
+    const connectedAt = latestConnectedAt(existing);
+    if (connectedAt !== null && webhookTimestamp < connectedAt) {
+      log.info("webhook.linear_auth_health_skipped", {
+        trace_id: traceId,
+        org_id: orgId,
+        type: eventType,
+        action,
+        reason: "revocation_older_than_connection",
+      });
+      return {
+        ok: true as const,
+        skipped: true as const,
+        reason: "revocation_older_than_connection",
+      };
+    }
+
     await deleteOAuthToken(env, orgId);
     await setLinearAuthState(env, {
       orgId,
@@ -326,6 +353,7 @@ app.post("/webhook", async (c) => {
       action,
       traceId,
       deliveryId,
+      webhookTimestamp,
     });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json(result);
@@ -419,6 +447,10 @@ app.put("/config/triggers", async (c) => {
 
 app.get("/config/project-repos", async (c) => {
   return c.json(await getProjectRepoMapping(c.env));
+});
+
+app.get("/config/auth-health", async (c) => {
+  return c.json(await getLinearAuthHealthResponse(c.env, getLinearReconnectUrl(c.env)));
 });
 
 app.put("/config/project-repos", async (c) => {

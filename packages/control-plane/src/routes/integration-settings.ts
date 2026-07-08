@@ -3,6 +3,7 @@
  */
 
 import {
+  buildInternalAuthHeaders,
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   isValidReasoningEffort,
@@ -30,6 +31,7 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:integration-settings");
+const LINEAR_AUTH_HEALTH_URL = "https://internal/config/auth-health";
 
 function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
   const id = match.groups?.id;
@@ -377,7 +379,46 @@ async function handleGetResolvedConfig(
   return error(`Unsupported integration: ${id}`, 400);
 }
 
+async function handleGetLinearAuthHealth(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (!env.LINEAR_BOT) {
+    return error("Linear bot service binding is not configured", 503);
+  }
+
+  if (!env.INTERNAL_CALLBACK_SECRET) {
+    return error("Internal authentication not configured", 500);
+  }
+
+  try {
+    const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, ctx.trace_id);
+    headers.Accept = "application/json";
+
+    return await env.LINEAR_BOT.fetch(LINEAR_AUTH_HEALTH_URL, {
+      method: "GET",
+      headers,
+    });
+  } catch (e) {
+    logger.error("Failed to fetch Linear auth health", {
+      event: "linear.auth_health.fetch_failed",
+      error: e instanceof Error ? e : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Linear auth health unavailable", 503);
+  }
+}
+
 export const integrationSettingsRoutes: Route[] = [
+  // Linear OAuth auth health - proxied from the Linear bot config surface
+  {
+    method: "GET",
+    pattern: parsePattern("/integration-settings/linear/auth-health"),
+    handler: handleGetLinearAuthHealth,
+  },
   // Integration settings — global
   {
     method: "GET",

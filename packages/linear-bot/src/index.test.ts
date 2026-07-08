@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import type * as WebhookHandler from "./webhook-handler";
 import {
   consumeOAuthState,
@@ -77,6 +78,7 @@ describe("OAuth routes", () => {
     const state = url.searchParams.get("state");
     expect(url.origin + url.pathname).toBe("https://linear.app/oauth/authorize");
     expect(url.searchParams.get("actor")).toBe("app");
+    expect(url.searchParams.get("prompt")).toBe("consent");
     expect(state).toBeTruthy();
     await expect(consumeOAuthState(env, state ?? "")).resolves.toBe(true);
   });
@@ -136,6 +138,65 @@ describe("OAuth routes", () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Acme");
+  });
+});
+
+describe("Config auth health route", () => {
+  it("returns the most actionable auth health state and reconnect URL", async () => {
+    const now = Date.now();
+    const { kv } = createFakeKV({
+      "linear_auth:org-connected": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-connected",
+        status: "connected",
+        reason: "oauth_callback",
+        updatedAt: now + 1,
+        installation: { orgName: "Connected Co" },
+      }),
+      "linear_auth:org-reauth": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-reauth",
+        status: "reauthorization_required",
+        reason: "refresh_invalid_grant",
+        updatedAt: now,
+        lastTraceId: "trace-reauth",
+        installation: { orgName: "Needs Reconnect" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+
+    const res = await app.fetch(
+      new Request("http://localhost/config/auth-health", {
+        headers: await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET),
+      }),
+      env
+    );
+
+    await expect(res.json()).resolves.toMatchObject({
+      status: "reauthorization_required",
+      reason: "refresh_invalid_grant",
+      orgId: "org-reauth",
+      orgName: "Needs Reconnect",
+      lastTraceId: "trace-reauth",
+      reconnectUrl: "https://linear-bot.example.test/oauth/authorize",
+    });
+  });
+
+  it("returns unknown auth health when no workspace state has been written yet", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+
+    const res = await app.fetch(
+      new Request("http://localhost/config/auth-health", {
+        headers: await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET),
+      }),
+      env
+    );
+
+    await expect(res.json()).resolves.toEqual({
+      status: "unknown",
+      reconnectUrl: "https://linear-bot.example.test/oauth/authorize",
+    });
   });
 });
 
@@ -272,6 +333,50 @@ describe("POST /webhook", () => {
       details: { eventType: "OAuthApp", eventAction: "revoked" },
     });
     expect(store.has("oauth:token:org-1")).toBe(false);
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores OAuth app revocation events older than the latest connection", async () => {
+    const now = Date.now();
+    const { kv, store } = createFakeKV({
+      "oauth:token:org-1": JSON.stringify({
+        access_token: "fresh-token",
+        refresh_token: "refresh-token",
+        expires_at: now + 60 * 60 * 1000,
+      }),
+      "linear_auth:org-1": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-1",
+        status: "connected",
+        reason: "oauth_callback",
+        updatedAt: now,
+        installation: {
+          orgName: "Acme",
+          lastConnectedAt: now,
+        },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const payload = {
+      type: "OAuthApp",
+      action: "revoked",
+      organizationId: "org-1",
+      webhookTimestamp: now - 1_000,
+    };
+
+    const res = await app.fetch(await makeWebhookRequest(payload, "delivery-auth-late"), env);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "revocation_older_than_connection",
+    });
+    expect(store.has("oauth:token:org-1")).toBe(true);
+    await expect(getLinearAuthState(env, "org-1")).resolves.toMatchObject({
+      status: "connected",
+      reason: "oauth_callback",
+    });
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 

@@ -11,6 +11,7 @@ import {
   OAUTH_STATE_TTL_MS,
   consumeOAuthState,
   getLinearAuthState,
+  getLinearAuthHealthResponse,
   setLinearAuthState,
   storeOAuthState,
 } from "./kv-store";
@@ -202,6 +203,72 @@ describe("linear auth health", () => {
         orgName: "Acme",
         appUserId: "app-user-1",
       },
+    });
+  });
+
+  it("uses all KV list pages when building the auth health response", async () => {
+    const now = Date.now();
+    const { kv } = createFakeKV({
+      "linear_auth:org-connected": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-connected",
+        status: "connected",
+        reason: "oauth_callback",
+        updatedAt: now + 1,
+      }),
+      "linear_auth:org-reauth": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-reauth",
+        status: "reauthorization_required",
+        reason: "refresh_invalid_grant",
+        updatedAt: now,
+      }),
+    });
+    const kvMock = kv as unknown as { list: ReturnType<typeof vi.fn> };
+    kvMock.list
+      .mockResolvedValueOnce({
+        keys: [{ name: "linear_auth:org-connected" }],
+        list_complete: false,
+        cursor: "next-page",
+      })
+      .mockResolvedValueOnce({
+        keys: [{ name: "linear_auth:org-reauth" }],
+        list_complete: true,
+      });
+
+    await expect(
+      getLinearAuthHealthResponse(makeLinearBotEnv(kv), "https://linear-bot.test/oauth/authorize")
+    ).resolves.toMatchObject({
+      status: "reauthorization_required",
+      orgId: "org-reauth",
+      reason: "refresh_invalid_grant",
+    });
+    expect(kvMock.list).toHaveBeenCalledTimes(2);
+    expect(kvMock.list).toHaveBeenLastCalledWith({
+      prefix: "linear_auth:",
+      cursor: "next-page",
+    });
+  });
+
+  it("returns unavailable auth health when a listed state cannot be read", async () => {
+    const { kv } = createFakeKV({
+      "linear_auth:org-1": JSON.stringify({
+        schemaVersion: 1,
+        orgId: "org-1",
+        status: "connected",
+        reason: "oauth_callback",
+        updatedAt: Date.now(),
+      }),
+    });
+    const kvMock = kv as unknown as { get: ReturnType<typeof vi.fn> };
+    kvMock.get.mockRejectedValueOnce(new Error("read failed"));
+
+    await expect(
+      getLinearAuthHealthResponse(makeLinearBotEnv(kv), "https://linear-bot.test/oauth/authorize")
+    ).resolves.toEqual({
+      status: "unavailable",
+      reason: "auth_health_unavailable",
+      reconnectUrl: "https://linear-bot.test/oauth/authorize",
     });
   });
 });

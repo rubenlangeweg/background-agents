@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCard } from "@/components/ui/form-controls";
+import { RefreshIcon } from "@/components/ui/icons";
 import {
   Select,
   SelectContent,
@@ -39,6 +40,14 @@ import {
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
+const AUTH_HEALTH_KEY = "/api/integration-settings/linear/auth-health";
+
+type LinearAuthHealthStatus =
+  | "connected"
+  | "reauthorization_required"
+  | "transient_failure"
+  | "unknown"
+  | "unavailable";
 
 interface GlobalResponse {
   settings: LinearGlobalConfig | null;
@@ -57,12 +66,27 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+interface LinearAuthHealthResponse {
+  status: LinearAuthHealthStatus;
+  reconnectUrl?: string;
+  orgId?: string;
+  orgName?: string;
+  reason?: string;
+  updatedAt?: number;
+  lastTraceId?: string;
+}
+
 export function LinearIntegrationSettings() {
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
     useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
+  const {
+    data: authHealth,
+    isLoading: authHealthLoading,
+    error: authHealthError,
+  } = useSWR<LinearAuthHealthResponse>(AUTH_HEALTH_KEY);
   const { enabledModelOptions } = useEnabledModels();
 
   if (globalLoading || repoSettingsLoading) {
@@ -81,14 +105,20 @@ export function LinearIntegrationSettings() {
         sessions.
       </p>
 
-      <Section title="Connection" description="Linear uses control-plane repository access.">
+      <Section title="Connection" description="Linear OAuth status and repository scope.">
+        <LinearAuthHealthPanel
+          health={authHealth}
+          loading={authHealthLoading}
+          error={authHealthError}
+        />
+
         {availableRepos.length > 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-4 text-sm text-muted-foreground">
             Repository access is available. You can target all repos or limit the integration to a
             selected allowlist.
           </p>
         ) : (
-          <p className="text-sm text-warning bg-warning-muted border border-warning/20 px-4 py-3 rounded-sm">
+          <p className="mt-4 text-sm text-warning bg-warning-muted border border-warning/20 px-4 py-3 rounded-sm">
             No repositories are currently accessible from the control plane. Repository filtering is
             unavailable until repository access is configured.
           </p>
@@ -113,6 +143,122 @@ export function LinearIntegrationSettings() {
       </Section>
     </div>
   );
+}
+
+function LinearAuthHealthPanel({
+  health,
+  loading,
+  error,
+}: {
+  health: LinearAuthHealthResponse | undefined;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="w-2 h-2 rounded-full bg-muted-foreground animate-pulse" />
+        Checking Linear OAuth health...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-sm text-warning bg-warning-muted border border-warning/20 px-4 py-3 rounded-sm">
+        Unable to load Linear OAuth health.
+      </div>
+    );
+  }
+
+  const status = health?.status ?? "unknown";
+  const statusCopy = linearAuthHealthCopy(status, health?.orgName);
+  const oauthActionLabel =
+    status === "reauthorization_required"
+      ? "Reconnect Linear"
+      : status === "unknown"
+        ? "Connect Linear"
+        : null;
+
+  return (
+    <div className={`border px-4 py-3 rounded-sm ${statusCopy.classes}`}>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${statusCopy.dotClass}`} />
+            <p className="text-sm font-medium text-foreground">{statusCopy.label}</p>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">{statusCopy.description}</p>
+          {health?.reason && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Reason: {formatLinearAuthReason(health.reason)}
+            </p>
+          )}
+        </div>
+
+        {health?.reconnectUrl && oauthActionLabel && (
+          <Button variant="outline" size="sm" asChild>
+            <a
+              href={health.reconnectUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="gap-1.5"
+            >
+              <RefreshIcon className="w-4 h-4" />
+              {oauthActionLabel}
+            </a>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function linearAuthHealthCopy(status: LinearAuthHealthStatus, orgName?: string) {
+  switch (status) {
+    case "connected":
+      return {
+        label: "Connected",
+        description: orgName
+          ? `Linear OAuth is connected to ${orgName}.`
+          : "Linear OAuth is connected.",
+        classes: "bg-success-muted border-success/20",
+        dotClass: "bg-success",
+      };
+    case "reauthorization_required":
+      return {
+        label: "Reconnect required",
+        description: "Linear OAuth needs reauthorization before new Linear sessions can start.",
+        classes: "bg-destructive-muted border-destructive-border",
+        dotClass: "bg-destructive",
+      };
+    case "transient_failure":
+      return {
+        label: "Temporary auth issue",
+        description: "The last Linear auth check failed temporarily. Retry before reconnecting.",
+        classes: "bg-warning-muted border-warning/20",
+        dotClass: "bg-warning",
+      };
+    case "unavailable":
+      return {
+        label: "Auth health unavailable",
+        description: "Linear auth health is not available from the backend yet.",
+        classes: "bg-muted/40 border-border",
+        dotClass: "bg-muted-foreground",
+      };
+    case "unknown":
+    default:
+      return {
+        label: "Auth health unknown",
+        description: "No Linear OAuth health has been recorded yet.",
+        classes: "bg-muted/40 border-border",
+        dotClass: "bg-muted-foreground",
+      };
+  }
+}
+
+function formatLinearAuthReason(reason: string) {
+  return reason.replace(/_/g, " ");
 }
 
 function GlobalSettingsSection({

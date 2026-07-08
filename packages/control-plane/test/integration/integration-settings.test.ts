@@ -25,6 +25,13 @@ describe("Integration settings API", () => {
       });
       expect(response.status).toBe(401);
     });
+
+    it("returns 401 for Linear auth-health without auth header", async () => {
+      const response = await SELF.fetch(
+        "https://test.local/integration-settings/linear/auth-health"
+      );
+      expect(response.status).toBe(401);
+    });
   });
 
   describe("unknown integration ID", () => {

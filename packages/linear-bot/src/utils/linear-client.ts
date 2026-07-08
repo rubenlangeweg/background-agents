@@ -40,6 +40,7 @@ export function buildOAuthAuthorizeUrl(env: Env, state?: string): string {
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", "read,write,app:assignable,app:mentionable");
   authUrl.searchParams.set("actor", "app");
+  authUrl.searchParams.set("prompt", "consent");
   if (state) authUrl.searchParams.set("state", state);
   return authUrl.toString();
 }
@@ -334,7 +335,7 @@ function authFailureReasonForPersistedState(reason: unknown): LinearAuthFailureR
 }
 
 export function getLinearReconnectUrl(env: Env): string {
-  return `${env.WORKER_URL}/oauth/authorize`;
+  return new URL("/oauth/authorize", env.WORKER_URL).toString();
 }
 
 export async function getLinearAuthContext(

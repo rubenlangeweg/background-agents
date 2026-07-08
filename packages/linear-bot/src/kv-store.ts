@@ -9,6 +9,7 @@ import type {
   ProjectRepoMapping,
   UserPreferences,
   IssueSession,
+  LinearAuthHealthResponse,
   LinearWorkspaceAuthState,
   LinearWorkspaceAuthStatus,
 } from "./types";
@@ -196,6 +197,99 @@ export async function setLinearAuthState(
   };
   await env.LINEAR_KV.put(getLinearAuthStateKey(params.orgId), JSON.stringify(state));
   return state;
+}
+
+function authStateRank(status: LinearWorkspaceAuthStatus): number {
+  if (status === "reauthorization_required") return 3;
+  if (status === "transient_failure") return 2;
+  return 1;
+}
+
+function chooseMostActionableAuthState(
+  states: LinearWorkspaceAuthState[]
+): LinearWorkspaceAuthState | null {
+  let selected: LinearWorkspaceAuthState | null = null;
+  for (const state of states) {
+    if (!selected) {
+      selected = state;
+      continue;
+    }
+
+    const stateRank = authStateRank(state.status);
+    const selectedRank = authStateRank(selected.status);
+    if (
+      stateRank > selectedRank ||
+      (stateRank === selectedRank && state.updatedAt > selected.updatedAt)
+    ) {
+      selected = state;
+    }
+  }
+  return selected;
+}
+
+async function listLinearAuthStateKeys(env: Env): Promise<string[]> {
+  const names: string[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await env.LINEAR_KV.list({ prefix: LINEAR_AUTH_KEY_PREFIX, cursor });
+    names.push(...page.keys.map((key) => key.name));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  return names;
+}
+
+async function readLinearAuthStateForHealth(
+  env: Env,
+  keyName: string
+): Promise<LinearWorkspaceAuthState | null> {
+  const orgId = keyName.slice(LINEAR_AUTH_KEY_PREFIX.length);
+  const raw = await env.LINEAR_KV.get(keyName);
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  return isLinearWorkspaceAuthState(parsed, orgId) ? parsed : null;
+}
+
+export async function getLinearAuthHealthResponse(
+  env: Env,
+  reconnectUrl: string
+): Promise<LinearAuthHealthResponse> {
+  try {
+    const keyNames = await listLinearAuthStateKeys(env);
+    const states = await Promise.all(
+      keyNames.map((keyName) => readLinearAuthStateForHealth(env, keyName))
+    );
+    const selected = chooseMostActionableAuthState(
+      states.filter((state): state is LinearWorkspaceAuthState => state !== null)
+    );
+
+    if (!selected) {
+      return { status: "unknown", reconnectUrl };
+    }
+
+    return {
+      status: selected.status,
+      reconnectUrl,
+      orgId: selected.orgId,
+      orgName: selected.installation?.orgName,
+      reason: selected.reason,
+      updatedAt: selected.updatedAt,
+      lastTraceId: selected.lastTraceId,
+    };
+  } catch (e) {
+    log.warn("kv.get_linear_auth_health_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return { status: "unavailable", reason: "auth_health_unavailable", reconnectUrl };
+  }
 }
 
 // ─── OAuth State ────────────────────────────────────────────────────────────

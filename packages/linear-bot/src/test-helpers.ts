@@ -28,6 +28,13 @@ export function createFakeKV(initial: Record<string, string> = {}) {
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
+    list: vi.fn(async ({ prefix }: { prefix?: string } = {}) => ({
+      keys: Array.from(store.keys())
+        .filter((key) => !prefix || key.startsWith(prefix))
+        .map((name) => ({ name })),
+      list_complete: true,
+      cursor: undefined,
+    })),
   };
 
   return { kv: kv as unknown as KVNamespace, store, putCalls };
