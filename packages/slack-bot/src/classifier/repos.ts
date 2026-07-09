@@ -22,6 +22,7 @@ import {
   LOCAL_CACHE_TTL_MS,
 } from "./control-plane";
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("repos");
 
@@ -40,6 +41,12 @@ let localCache: {
 } | null = null;
 
 const WATCHED_CHANNELS_CACHE_KEY = "slack:watched-channels";
+
+const watchedChannelsSchema = z.array(z.string());
+
+const watchedChannelsResponseSchema = z.object({
+  channels: watchedChannelsSchema.optional(),
+});
 
 /**
  * Convert a control plane repo to a RepoConfig.
@@ -201,8 +208,9 @@ export async function getWatchedChannels(env: Env, traceId?: string): Promise<Se
 
   try {
     const cached = await kv.get(WATCHED_CHANNELS_CACHE_KEY, "json");
-    if (Array.isArray(cached)) {
-      return new Set(cached as string[]);
+    const parsed = watchedChannelsSchema.safeParse(cached);
+    if (parsed.success) {
+      return new Set(parsed.data);
     }
   } catch (e) {
     log.warn("kv.get", {
@@ -229,8 +237,11 @@ export async function getWatchedChannels(env: Env, traceId?: string): Promise<Se
       return new Set();
     }
 
-    const data = (await response.json()) as { channels?: string[] };
-    const channels = Array.isArray(data.channels) ? data.channels : [];
+    const parsed = watchedChannelsResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return new Set();
+    }
+    const channels = parsed.data.channels ?? [];
 
     try {
       await kv.put(WATCHED_CHANNELS_CACHE_KEY, JSON.stringify(channels), {
