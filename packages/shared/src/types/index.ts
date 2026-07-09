@@ -1374,6 +1374,13 @@ export interface Automation {
   triggerConfig: TriggerConfig | null;
   /** Selected repositories (0..MAX_AUTOMATION_REPOSITORIES); the canonical repo representation. */
   repositories: AutomationRepository[];
+  /**
+   * Selected environments (design §13.3): each firing fans out one session
+   * per environment, opening that environment's full workspace, alongside the
+   * per-repository sessions. Repositories and environments share the combined
+   * MAX_AUTOMATION_REPOSITORIES target cap.
+   */
+  environmentIds: string[];
 }
 
 export interface CreateAutomationRequest {
@@ -1389,6 +1396,8 @@ export interface CreateAutomationRequest {
   sentryClientSecret?: string;
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories?: AutomationRepositoryInput[];
+  /** Environments to fan out over, one workspace session each (design §13.3). */
+  environmentIds?: string[];
 }
 
 export interface UpdateAutomationRequest {
@@ -1402,6 +1411,8 @@ export interface UpdateAutomationRequest {
   triggerConfig?: TriggerConfig;
   /** Replaces the full repository selection when present. */
   repositories?: AutomationRepositoryInput[];
+  /** Replaces the full environment selection when present (empty clears). */
+  environmentIds?: string[];
 }
 
 export interface AutomationRun {
@@ -1427,6 +1438,11 @@ export interface AutomationRun {
   repoName: string | null;
   repoId: number | null;
   baseBranch: string | null;
+  /**
+   * Environment snapshot taken at firing time; the run's session opens this
+   * environment's workspace. Null for repository and repo-less runs.
+   */
+  environmentId: string | null;
 }
 
 export interface ListAutomationsResponse {
@@ -1449,7 +1465,10 @@ export type AutomationInvocationStatus =
   | "partial_failed"
   | "skipped";
 
-/** One firing of an automation: 0 runs when skipped, else one run per repository. */
+/**
+ * One firing of an automation: 0 runs when skipped, else one run per target —
+ * repository or environment — with repo-less automations getting a single run.
+ */
 export interface AutomationInvocation {
   id: string;
   automationId: string;

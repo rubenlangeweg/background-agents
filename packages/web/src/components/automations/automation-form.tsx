@@ -16,6 +16,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { useRepos } from "@/hooks/use-repos";
+import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
@@ -39,13 +40,14 @@ import {
   ChevronDownIcon,
   CheckIcon,
   FolderIcon,
+  BoxIcon,
   SearchIcon,
 } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import { ConditionBuilder } from "./condition-builder";
 import { cn } from "@/lib/utils";
-import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
+import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -106,6 +108,12 @@ export interface AutomationFormValues {
   name: string;
   /** Full repository selection; submit always sends it (empty = repo-less). */
   repositories?: AutomationRepositoryInput[];
+  /**
+   * Environment selection; submit always sends it (empty = none). Each firing
+   * opens one workspace session per selected environment, alongside the
+   * per-repository sessions.
+   */
+  environmentIds?: string[];
   model: string;
   reasoningEffort: string | null;
   scheduleCron: string;
@@ -126,6 +134,7 @@ interface AutomationFormProps {
 
 export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
   const { repos, loading: loadingRepos } = useRepos();
+  const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
@@ -133,20 +142,27 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
 
   const [name, setName] = useState(initialValues?.name ?? "");
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] = useState<string[]>(
+    () => initialValues?.environmentIds ?? []
+  );
   const [selectedRepos, setSelectedRepos] = useState<string[]>(() =>
     initialRepositories.map((repository) =>
       repositoryKey(repository.repoOwner, repository.repoName)
     )
   );
   const [repoSelectionMode, setRepoSelectionMode] = useState<RepoSelectionMode>(() =>
-    initialRepositories.length > 1 ? "multiple" : "single"
+    // Combined count: a lone-repo default here would let the single-select
+    // collapse effect silently drop hydrated environment targets on edit.
+    initialRepositories.length + (initialValues?.environmentIds?.length ?? 0) > 1
+      ? "multiple"
+      : "single"
   );
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const selectedRepo = selectedRepos[0] ?? "";
   const repoOwner = selectedRepo.split("/")[0] ?? "";
   const repoName = selectedRepo.split("/")[1] ?? "";
-  const usesSingleRepository = selectedRepos.length === 1;
+  const usesSingleRepository = selectedRepos.length === 1 && selectedEnvironmentIds.length === 0;
   const { branches, loading: loadingBranches } = useBranches(
     usesSingleRepository ? repoOwner : "",
     usesSingleRepository ? repoName : ""
@@ -182,8 +198,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const repositorySelectionDescription = repositoryRequired
     ? "Repository-scoped triggers need exactly one repository."
     : multipleSelectionEnabled
-      ? `Select no repository, one repository, or up to ${MAX_AUTOMATION_REPOSITORIES} repositories. Each firing works every selected repository in its own session.`
-      : "Select no repository or one repository.";
+      ? `Select up to ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined. Each firing works every selected repository in its own session and opens one session per selected environment's full workspace.`
+      : "Select no repository, one repository, or one environment.";
   // Mirror the server rule: a slack_event needs a slack_channel. A text_match is
   // optional — without one it fires on every message in the watched channel.
   const slackConditionsValid = !isSlack || conditions.some((c) => c.type === "slack_channel");
@@ -246,31 +262,70 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   }, [multiRepoAllowed, repoSelectionMode]);
 
   useEffect(() => {
-    if (multipleSelectionEnabled || selectedRepos.length <= 1) return;
-    applySelectedRepos([selectedRepos[0]]);
-  }, [applySelectedRepos, multipleSelectionEnabled, selectedRepos]);
+    if (repositoryRequired && selectedEnvironmentIds.length > 0) {
+      setSelectedEnvironmentIds([]);
+    }
+  }, [repositoryRequired, selectedEnvironmentIds]);
+
+  // Collapsing to single-select keeps one target: the first repository, or the
+  // first environment when only environments are selected.
+  useEffect(() => {
+    if (multipleSelectionEnabled || selectedRepos.length + selectedEnvironmentIds.length <= 1) {
+      return;
+    }
+    if (selectedRepos.length > 0) {
+      applySelectedRepos([selectedRepos[0]]);
+      setSelectedEnvironmentIds([]);
+    } else {
+      setSelectedEnvironmentIds([selectedEnvironmentIds[0]]);
+    }
+  }, [applySelectedRepos, multipleSelectionEnabled, selectedRepos, selectedEnvironmentIds]);
+
+  const targetCount = selectedRepos.length + selectedEnvironmentIds.length;
 
   const handleRepoToggle = useCallback(
     (repoFullName: string) => {
       const key = repoFullName.toLowerCase();
       if (!multipleSelectionEnabled) {
         applySelectedRepos([key]);
+        setSelectedEnvironmentIds([]);
         setRepoDropdownOpen(false);
         return;
       }
 
       const selected = selectedRepos.includes(key);
-      if (!selected && selectedRepos.length >= MAX_AUTOMATION_REPOSITORIES) return;
+      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
       applySelectedRepos(
         selected ? selectedRepos.filter((repo) => repo !== key) : [...selectedRepos, key]
       );
     },
-    [applySelectedRepos, multipleSelectionEnabled, selectedRepos]
+    [applySelectedRepos, multipleSelectionEnabled, selectedRepos, targetCount]
+  );
+
+  const handleEnvironmentToggle = useCallback(
+    (environmentId: string) => {
+      if (!multipleSelectionEnabled) {
+        setSelectedEnvironmentIds([environmentId]);
+        applySelectedRepos([]);
+        setRepoDropdownOpen(false);
+        return;
+      }
+
+      const selected = selectedEnvironmentIds.includes(environmentId);
+      if (!selected && targetCount >= MAX_AUTOMATION_REPOSITORIES) return;
+      setSelectedEnvironmentIds(
+        selected
+          ? selectedEnvironmentIds.filter((id) => id !== environmentId)
+          : [...selectedEnvironmentIds, environmentId]
+      );
+    },
+    [applySelectedRepos, multipleSelectionEnabled, selectedEnvironmentIds, targetCount]
   );
 
   const handleNoRepository = useCallback(() => {
     if (repositoryRequired) return;
     applySelectedRepos([]);
+    setSelectedEnvironmentIds([]);
     setRepoDropdownOpen(false);
   }, [applySelectedRepos, repositoryRequired]);
 
@@ -316,6 +371,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
     const values: AutomationFormValues = {
       name: name.trim(),
+      // Always send the full selection — an empty list means none.
+      environmentIds: selectedEnvironmentIds,
       model: resolvedModel,
       reasoningEffort:
         reasoningEffort && isValidReasoningEffort(resolvedModel, reasoningEffort)
@@ -370,12 +427,40 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         repo.owner.toLowerCase().includes(query)
     );
   }, [repos, repoQuery]);
-  const repositoryLabel =
-    selectedRepos.length === 0
-      ? NO_REPOSITORY_LABEL
-      : selectedRepos.length === 1
-        ? (findRepo(selectedRepo)?.fullName ?? selectedRepo)
-        : `${selectedRepos.length} repositories`;
+  const filteredEnvironments = useMemo(() => {
+    // Environments are hidden for repo-scoped triggers, which must stay bound
+    // to the webhook's repository.
+    if (repositoryRequired) return [];
+    const query = repoQuery.trim().toLowerCase();
+    if (!query) return environments;
+    return environments.filter((environment) => environment.name.toLowerCase().includes(query));
+  }, [environments, repositoryRequired, repoQuery]);
+  const environmentName = (environmentId: string) =>
+    environments.find((environment) => environment.id === environmentId)?.name ??
+    (loadingEnvironments ? "Loading..." : environmentId);
+  const repositoryLabel = (() => {
+    if (targetCount === 0) return NO_REPOSITORY_LABEL;
+    if (selectedRepos.length === 1 && selectedEnvironmentIds.length === 0) {
+      return findRepo(selectedRepo)?.fullName ?? selectedRepo;
+    }
+    if (selectedEnvironmentIds.length === 1 && selectedRepos.length === 0) {
+      return environmentName(selectedEnvironmentIds[0]);
+    }
+    const parts: string[] = [];
+    if (selectedRepos.length > 0) {
+      parts.push(
+        selectedRepos.length === 1 ? "1 repository" : `${selectedRepos.length} repositories`
+      );
+    }
+    if (selectedEnvironmentIds.length > 0) {
+      parts.push(
+        selectedEnvironmentIds.length === 1
+          ? "1 environment"
+          : `${selectedEnvironmentIds.length} environments`
+      );
+    }
+    return parts.join(" + ");
+  })();
   const reasoningConfig = getReasoningConfig(resolvedModel);
 
   return (
@@ -436,13 +521,17 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
               aria-label="Repository selection"
             >
-              <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              {selectedEnvironmentIds.length > 0 && selectedRepos.length === 0 ? (
+                <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
               <span className="min-w-0 flex-1 truncate text-left">
-                {loadingRepos && selectedRepos.length === 0 ? "Loading..." : repositoryLabel}
+                {loadingRepos && targetCount === 0 ? "Loading..." : repositoryLabel}
               </span>
-              {multipleSelectionEnabled && selectedRepos.length > 1 && (
+              {multipleSelectionEnabled && targetCount > 1 && (
                 <span className="shrink-0 text-xs text-muted-foreground">
-                  {selectedRepos.length}/{MAX_AUTOMATION_REPOSITORIES}
+                  {targetCount}/{MAX_AUTOMATION_REPOSITORIES}
                 </span>
               )}
               <ChevronDownIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -465,6 +554,65 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 />
               </div>
             </div>
+            {filteredEnvironments.length > 0 && (
+              <>
+                <div className="border-b border-border-muted px-3 py-2">
+                  <span className="text-xs font-medium uppercase text-muted-foreground">
+                    Environments
+                  </span>
+                </div>
+                <div className="max-h-40 overflow-y-auto border-b border-border-muted py-1">
+                  {filteredEnvironments.map((environment) => {
+                    const selected = selectedEnvironmentIds.includes(environment.id);
+                    const disabled =
+                      multipleSelectionEnabled &&
+                      !selected &&
+                      targetCount >= MAX_AUTOMATION_REPOSITORIES;
+
+                    return multipleSelectionEnabled ? (
+                      <label
+                        key={environment.id}
+                        className={cn(
+                          "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                          selected ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                          disabled && "cursor-not-allowed opacity-50"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={disabled}
+                          onChange={() => handleEnvironmentToggle(environment.id)}
+                          className="h-4 w-4 rounded border-border accent-accent"
+                        />
+                        <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{environment.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatRepositoriesLabel(environment.repositories)}
+                        </span>
+                      </label>
+                    ) : (
+                      <button
+                        type="button"
+                        key={environment.id}
+                        onClick={() => handleEnvironmentToggle(environment.id)}
+                        className={cn(
+                          "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
+                          selected ? "bg-muted text-foreground" : "hover:bg-muted/60"
+                        )}
+                      >
+                        <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{environment.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatRepositoriesLabel(environment.repositories)}
+                        </span>
+                        {selected && <CheckIcon className="h-4 w-4 shrink-0 text-accent" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
             <div className="flex items-center justify-between border-b border-border-muted px-3 py-2">
               <span className="text-xs font-medium uppercase text-muted-foreground">
                 All repositories
@@ -485,13 +633,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 <label
                   className={cn(
                     "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                    selectedRepos.length === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                    targetCount === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
                     repositoryRequired && "cursor-not-allowed opacity-50"
                   )}
                 >
                   <input
                     type="checkbox"
-                    checked={selectedRepos.length === 0}
+                    checked={targetCount === 0}
                     disabled={repositoryRequired}
                     onChange={handleNoRepository}
                     className="h-4 w-4 rounded border-border accent-accent"
@@ -506,13 +654,13 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                   onClick={handleNoRepository}
                   className={cn(
                     "flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm transition",
-                    selectedRepos.length === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
+                    targetCount === 0 ? "bg-muted text-foreground" : "hover:bg-muted/60",
                     repositoryRequired && "cursor-not-allowed opacity-50"
                   )}
                 >
                   <RepoIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate">{NO_REPOSITORY_LABEL}</span>
-                  {selectedRepos.length === 0 && <CheckIcon className="h-4 w-4 text-accent" />}
+                  {targetCount === 0 && <CheckIcon className="h-4 w-4 text-accent" />}
                 </button>
               )}
               {filteredRepos.map((repo) => {
@@ -520,7 +668,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 const disabled =
                   multipleSelectionEnabled &&
                   !checked &&
-                  selectedRepos.length >= MAX_AUTOMATION_REPOSITORIES;
+                  targetCount >= MAX_AUTOMATION_REPOSITORIES;
 
                 return multipleSelectionEnabled ? (
                   <label

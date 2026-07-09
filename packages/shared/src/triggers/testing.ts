@@ -130,6 +130,7 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
     deletedAt: null,
     eventType: "issue.created",
     triggerConfig: { conditions: [] },
+    environmentIds: [],
     ...overrides,
   };
 }
