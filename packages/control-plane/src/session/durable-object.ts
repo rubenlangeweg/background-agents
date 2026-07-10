@@ -22,8 +22,8 @@ import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypt
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
-import { resolveScopeEnabled } from "../image-builds/scope";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -34,13 +34,10 @@ import {
   type WebSocketManager,
   type AlarmScheduler,
   type IdGenerator,
-  type RepoImageLookup,
   type ImageBuildLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
-import { RepoImageStore } from "../db/repo-images";
-import { ImageBuildStore } from "../db/image-builds";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -727,31 +724,12 @@ export class SessionDO extends DurableObject<Env> {
       sandboxDashboardUrlBuilder,
     };
 
-    // Create image lookups if D1 is available and the provider supports
-    // prebuilt images. Repo images run on the same provider set
-    // (RepoImageProvider aliases ImageBuildProvider).
-    let repoImageLookup: RepoImageLookup | undefined;
+    // Create the image lookup if D1 is available and the provider supports
+    // prebuilt images.
     let imageBuildLookup: ImageBuildLookup | undefined;
     const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
     if (this.env.DB && imageBuildProvider) {
-      const db = this.env.DB;
-      const repoImageStore = new RepoImageStore(db);
-      repoImageLookup = {
-        getLatestReady: (repoOwner, repoName, baseBranch) =>
-          repoImageStore.getLatestReady(repoOwner, repoName, imageBuildProvider, baseBranch),
-      };
-      const imageBuildStore = new ImageBuildStore(db);
-      imageBuildLookup = {
-        getLatestReady: async (environmentId) => {
-          const scope = { kind: "environment", id: environmentId } as const;
-          // Enablement (and entity existence) is the scope resolver's answer;
-          // the store read is a plain row lookup.
-          if (!(await resolveScopeEnabled(db, scope))) return null;
-          return imageBuildStore.getLatestReadyForSpawn(scope, imageBuildProvider);
-        },
-        markRestoreFailed: (imageBuildId, error) =>
-          imageBuildStore.markRestoreFailed(imageBuildId, error),
-      };
+      imageBuildLookup = createImageBuildLookup(this.env.DB, imageBuildProvider);
     }
 
     return new SandboxLifecycleManager(
@@ -765,7 +743,6 @@ export class SessionDO extends DurableObject<Env> {
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
       },
-      repoImageLookup,
       imageBuildLookup
     );
   }

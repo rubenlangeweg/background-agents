@@ -4,6 +4,7 @@
  * Handles:
  * - Build callbacks from async image builders (build-complete, build-failed)
  * - Build triggers (cron pass, save-hooks, manual rebuild)
+ * - The repo prebuild toggle (the repo_metadata flag write)
  * - Enabled-scope and status queries for the rebuild cron
  * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
  *
@@ -14,12 +15,22 @@
 
 import type { ImageBuildScopeKind, RepositoryShaEntry } from "@open-inspect/shared";
 import { ImageBuildStore, type ImageBuildRow } from "../db/image-builds";
+import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
-import { MIN_COMPATIBLE_RUNTIME_VERSION, type ImageBuildScope } from "../image-builds/model";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
-import { listEnabledScopes, listEnabledScopeUnits } from "../image-builds/scope";
+import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
+import {
+  listEnabledScopes,
+  listEnabledScopeUnits,
+  resolveScopeTarget,
+} from "../image-builds/scope";
 import { createImageBuildWorkflowFromEnv } from "../image-builds/workflow";
 import type {
   CompleteImageBuildCallback,
@@ -32,7 +43,9 @@ import {
   type RequestContext,
   type Route,
   error,
+  extractRepoParams,
   json,
+  parseJsonBody,
   parseMaxAgeMs,
   parsePattern,
 } from "./shared";
@@ -320,6 +333,32 @@ async function handleBuildFailed(
   }
 }
 
+/** Shared trigger execution behind the per-scope trigger handlers. */
+async function triggerBuildForScope(
+  env: Env,
+  scope: ImageBuildScope,
+  ctx: RequestContext
+): Promise<Response> {
+  try {
+    const result = await createImageBuildWorkflowFromEnv(env).triggerBuild(
+      scope,
+      workflowContext(ctx)
+    );
+    if (result.type === "up_to_date") {
+      // Unreachable via the trigger routes (triggerBuild is unconditional);
+      // guards the union exhaustively.
+      return json({ ok: true, upToDate: true });
+    }
+    return json({
+      buildId: result.buildId,
+      status: "building",
+      alreadyBuilding: result.type === "already_building",
+    });
+  } catch (e) {
+    return imageBuildErrorToResponse(e);
+  }
+}
+
 /**
  * POST /image-builds/trigger/environment/:id
  * Trigger a build for an environment scope (cron, save-hooks, manual rebuild).
@@ -340,26 +379,101 @@ async function handleTriggerEnvironmentBuild(
   const environmentId = match.groups?.id;
   if (!environmentId) return error("Environment ID required", 400);
 
-  const scope: ImageBuildScope = { kind: "environment", id: environmentId };
+  return triggerBuildForScope(env, { kind: "environment", id: environmentId }, ctx);
+}
+
+/**
+ * POST /image-builds/trigger/repo/:owner/:name
+ * Trigger a build for a repo scope (cron, save-hooks, manual rebuild).
+ */
+async function handleTriggerRepoBuild(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
+
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+
+  return triggerBuildForScope(env, repoImageBuildScope(params.owner, params.name), ctx);
+}
+
+/**
+ * PUT /image-builds/toggle/repo/:owner/:name
+ * Toggle prebuilds for a repo (the repo_metadata.image_build_enabled write).
+ * Toggling on triggers an immediate build via the save-hook, same as saving
+ * a prebuild-enabled environment; the environment toggle stays on the
+ * environments CRUD (prebuildEnabled).
+ */
+async function handleToggleRepoImageBuilds(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
+
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  const params = extractRepoParams(match);
+  if (params instanceof Response) return params;
+  const { owner, name } = params;
+
+  const body = await parseJsonBody<{ enabled?: unknown }>(request);
+  if (body instanceof Response) return body;
+
+  if (typeof body.enabled !== "boolean") {
+    return error("enabled must be a boolean", 400);
+  }
+
+  const scope = repoImageBuildScope(owner, name);
+
+  // Enabling an unknown or unresolvable repo would persist a flag whose
+  // builds can never plan; resolve through the trigger path's canonical
+  // resolver first and only persist on success. Disabling never resolves —
+  // a repo that became unresolvable must remain disableable.
+  if (body.enabled) {
+    try {
+      await resolveScopeTarget(env, scope);
+    } catch (e) {
+      return imageBuildErrorToResponse(e);
+    }
+  }
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env).triggerBuild(
-      scope,
-      workflowContext(ctx)
-    );
-    if (result.type === "up_to_date") {
-      // Unreachable via this route (triggerBuild is unconditional); guards
-      // the union exhaustively.
-      return json({ ok: true, upToDate: true });
-    }
-    return json({
-      buildId: result.buildId,
-      status: "building",
-      alreadyBuilding: result.type === "already_building",
-    });
+    await new RepoMetadataStore(env.DB).setImageBuildEnabled(owner, name, body.enabled);
   } catch (e) {
-    return imageBuildErrorToResponse(e);
+    logger.error("image_build.toggle_error", {
+      error: e instanceof Error ? e.message : String(e),
+      scope_kind: scope.kind,
+      scope_id: scope.id,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to toggle image builds", 500);
   }
+
+  logger.info("image_build.toggle", {
+    scope_kind: scope.kind,
+    scope_id: scope.id,
+    enabled: body.enabled,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+
+  if (body.enabled) {
+    scheduleImageBuildOnSave(env, scope, ctx);
+  }
+
+  return json({ ok: true, enabled: body.enabled });
 }
 
 function parseScopeParams(request: Request): ImageBuildScope | null | Response {
@@ -440,7 +554,11 @@ async function handleGetStatusLegacy(
     : null;
 
   try {
-    const rows = await readStatusRows(env, scope);
+    // Environment rows only: repo-scope rows would surface a bogus
+    // environment_id to the alias's consumers (deployed cron, web BFF).
+    const rows = (await readStatusRows(env, scope)).filter(
+      (row) => row.scope_kind === ("environment" satisfies ImageBuildScopeKind)
+    );
     return json({ images: rows.map((row) => ({ ...row, environment_id: row.scope_id })) });
   } catch (e) {
     logger.error("image_build.status_error", {
@@ -471,7 +589,7 @@ async function handleGetEnabledUnits(
   if (dbError) return dbError;
 
   try {
-    const units = await listEnabledScopeUnits(env.DB);
+    const units = await listEnabledScopeUnits(env);
     return json({
       units: units.map((unit) => ({
         scopeKind: unit.scope.kind,
@@ -488,6 +606,36 @@ async function handleGetEnabledUnits(
       trace_id: ctx.trace_id,
     });
     return error("Failed to get enabled scopes", 500);
+  }
+}
+
+/**
+ * GET /image-builds/enabled-repos
+ * The persisted repo prebuild flags (a plain D1 read, no source-control
+ * resolution). This is the settings UI's toggle-state feed: unlike the
+ * units feed, a repo is never dropped on a transient resolution failure.
+ */
+async function handleGetEnabledRepos(
+  _request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const providerError = requireImageBuilds(env);
+  if (providerError) return providerError;
+
+  const dbError = requireDb(env);
+  if (dbError) return dbError;
+
+  try {
+    return json({ repos: await new RepoMetadataStore(env.DB).getImageBuildEnabledRepos() });
+  } catch (e) {
+    logger.error("image_build.enabled_repos_error", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Failed to get enabled repos", 500);
   }
 }
 
@@ -509,7 +657,7 @@ async function handleGetEnabledEnvironmentsLegacy(
   if (dbError) return dbError;
 
   try {
-    const units = await listEnabledScopeUnits(env.DB);
+    const units = await listEnabledScopeUnits(env);
     return json({
       environments: units
         .filter((unit) => unit.scope.kind === ("environment" satisfies ImageBuildScopeKind))
@@ -639,6 +787,16 @@ export const imageBuildRoutes: Route[] = [
     handler: handleTriggerEnvironmentBuild,
   },
   {
+    method: "POST",
+    pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
+    handler: handleTriggerRepoBuild,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/image-builds/toggle/repo/:owner/:name"),
+    handler: handleToggleRepoImageBuilds,
+  },
+  {
     method: "GET",
     pattern: parsePattern("/image-builds/status"),
     handler: handleGetStatus,
@@ -647,6 +805,11 @@ export const imageBuildRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
     handler: handleGetEnabledUnits,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/image-builds/enabled-repos"),
+    handler: handleGetEnabledRepos,
   },
   {
     method: "POST",
